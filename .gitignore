@@ -16,6 +16,9 @@ checkpoints/
 *.pkl
 *.pth
 datasets/
-data/
+data/conversions/
+data/smpl/
+data/smplx/
+data/weights/
 hot_analysis/filtered_data/
 hot_analysis/temp_images/

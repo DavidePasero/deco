@@ -62,37 +62,39 @@ class TrainStepper():
         """
         self.model.train()
 
+        # Load basic data from batch
         img_paths = batch['img_path']
         img = batch['img'].to(self.device)
-
         img_scale_factor = batch['img_scale_factor'].to(self.device)
-
+        
+        # Load body model parameters
         pose = batch['pose'].to(self.device)
         betas = batch['betas'].to(self.device)
         transl = batch['transl'].to(self.device)
         has_smpl = batch['has_smpl'].to(self.device)
         is_smplx = batch['is_smplx'].to(self.device)
-
         cam_k = batch['cam_k'].to(self.device)
 
-        # Get binary contact labels
-        gt_contact_labels_3d = batch['contact_label_3d'].to(self.device)
+        # Get binary contact labels if available
+        has_contact_3d = batch.get('has_contact_3d', torch.zeros(img.shape[0])).to(self.device)
+        gt_contact_labels_3d = batch['contact_label_3d'].to(self.device) if has_contact_3d.sum() > 0 else torch.zeros(img.shape[0], self.n_vertices).to(self.device)
         
         # Get semantic contact labels if available
-        if 'semantic_contact' in batch:
+        has_semantic_contact = batch.get('has_semantic_contact', torch.zeros(img.shape[0])).to(self.device)
+        if 'semantic_contact' in batch and has_semantic_contact.sum() > 0:
             semantic_contact = batch['semantic_contact'].to(self.device)
-            has_semantic_contact = batch['has_semantic_contact'].to(self.device) if 'has_semantic_contact' in batch else torch.zeros(img.shape[0]).to(self.device)
         else:
             # Create dummy semantic contact with one class
             semantic_contact = gt_contact_labels_3d.unsqueeze(1)
-            has_semantic_contact = torch.zeros(img.shape[0]).to(self.device)
 
+        # Get segmentation masks if context is enabled
         if self.context:
             sem_mask_gt = batch['sem_mask'].to(self.device)
             part_mask_gt = batch['part_mask'].to(self.device)
 
-        polygon_contact_2d = batch['polygon_contact_2d'].to(self.device)
-        has_polygon_contact_2d = batch['has_polygon_contact_2d'].to(self.device)
+        # Get 2D contact data
+        has_polygon_contact_2d = batch.get('has_polygon_contact_2d', torch.zeros(img.shape[0])).to(self.device)
+        polygon_contact_2d = batch['polygon_contact_2d'].to(self.device) if has_polygon_contact_2d.sum() > 0 else torch.zeros(img.shape[0], 256, 256, 3).to(self.device)
 
         # Forward pass
         if self.context:
@@ -101,63 +103,63 @@ class TrainStepper():
             cont = self.model(img)    
 
         # Calculate losses
+        # Initialize with zero tensors to avoid None values
+        loss_sem = torch.tensor(0.0, device=self.device)
+        loss_part = torch.tensor(0.0, device=self.device)
+        loss_cont = torch.tensor(0.0, device=self.device)
+        loss_pix_anchoring = torch.tensor(0.0, device=self.device)
+        loss_details = {'binary_loss': 0.0, 'class_loss': 0.0, 'dist_loss': 0.0}
+        
+        # Calculate segmentation losses if context is enabled
         if self.context:
             loss_sem = self.sem_loss(sem_mask_gt, sem_mask_pred)
             loss_part = self.sem_loss(part_mask_gt, part_mask_pred)
         
-        # Use different loss calculation based on whether we're using the transformer
+        # Calculate contact loss based on available data
         if self.use_transformer:
             # For transformer model with multi-class output
-            # Use semantic contact labels if available, otherwise use binary contacts
             if has_semantic_contact.sum() > 0:
+                # Use semantic contact labels if available
                 loss_cont, loss_details = self.class_loss(cont, semantic_contact)
-            else:
-                # If no semantic contacts, use binary contacts
+            elif has_contact_3d.sum() > 0:
+                # Fall back to binary contacts if semantic not available
                 loss_cont, loss_details = self.class_loss(cont, gt_contact_labels_3d.unsqueeze(1))
         else:
             # For original model with binary output
-            loss_cont = self.class_loss(cont, gt_contact_labels_3d)
+            if has_contact_3d.sum() > 0:
+                loss_cont = self.class_loss(cont, gt_contact_labels_3d)
         
-        valid_polygon_contact_2d = has_polygon_contact_2d
-
-        # PAL loss calculation remains the same
+        # Calculate pixel anchoring loss if enabled and SMPL data is available
+        contact_2d_pred_rgb = torch.zeros_like(polygon_contact_2d)
         if self.pal_loss_weight > 0 and (is_smplx == 0).sum() > 0:
-            # For transformer case, we need to collapse the class dimension
+            # For transformer case, collapse class dimension to get binary contact
             if self.use_transformer:
-                # Take max across class dimension to get binary contact
-                cont_binary = torch.max(cont, dim=1)[0]
-                smpl_body_params = {'pose': pose[is_smplx == 0], 'betas': betas[is_smplx == 0],
-                                    'transl': transl[is_smplx == 0],
-                                    'has_smpl': has_smpl[is_smplx == 0]}
-                loss_pix_anchoring_smpl, contact_2d_pred_rgb_smpl, _ = self.pixel_anchoring_loss_smpl(
-                    cont_binary[is_smplx == 0],
-                    smpl_body_params,
-                    cam_k[is_smplx == 0],
-                    img_scale_factor[is_smplx == 0],
-                    polygon_contact_2d[is_smplx == 0],
-                    valid_polygon_contact_2d[is_smplx == 0]
-                )
+                cont_binary = torch.max(cont, dim=1)[0]  # Take max across class dimension
             else:
-                # Original implementation
-                smpl_body_params = {'pose': pose[is_smplx == 0], 'betas': betas[is_smplx == 0],
-                                    'transl': transl[is_smplx == 0],
-                                    'has_smpl': has_smpl[is_smplx == 0]}
-                loss_pix_anchoring_smpl, contact_2d_pred_rgb_smpl, _ = self.pixel_anchoring_loss_smpl(
-                    cont[is_smplx == 0],
-                    smpl_body_params,
-                    cam_k[is_smplx == 0],
-                    img_scale_factor[is_smplx == 0],
-                    polygon_contact_2d[is_smplx == 0],
-                    valid_polygon_contact_2d[is_smplx == 0]
-                )
+                cont_binary = cont
             
-            # weigh the smpl loss based on the number of smpl sample
+            # Prepare body parameters for SMPL models only
+            smpl_body_params = {
+                'pose': pose[is_smplx == 0], 
+                'betas': betas[is_smplx == 0],
+                'transl': transl[is_smplx == 0],
+                'has_smpl': has_smpl[is_smplx == 0]
+            }
+            
+            # Calculate pixel anchoring loss
+            loss_pix_anchoring_smpl, contact_2d_pred_rgb_smpl, _ = self.pixel_anchoring_loss_smpl(
+                cont_binary[is_smplx == 0],
+                smpl_body_params,
+                cam_k[is_smplx == 0],
+                img_scale_factor[is_smplx == 0],
+                polygon_contact_2d[is_smplx == 0],
+                has_polygon_contact_2d[is_smplx == 0]
+            )
+            
+            # Weight the loss based on the proportion of SMPL samples
             loss_pix_anchoring = loss_pix_anchoring_smpl * (is_smplx == 0).sum() / len(is_smplx)
             contact_2d_pred_rgb = contact_2d_pred_rgb_smpl
-        else:
-            loss_pix_anchoring = 0
-            contact_2d_pred_rgb = torch.zeros_like(polygon_contact_2d)
-
+        
         # Combine losses
         if self.context: 
             loss = loss_sem + loss_part + self.loss_weight * loss_cont + self.pal_loss_weight * loss_pix_anchoring
@@ -177,31 +179,35 @@ class TrainStepper():
             self.optimizer_part.step()
         self.optimizer_contact.step()
 
-        # Prepare loss dictionary
+        # Prepare loss dictionary - use .item() to detach from computation graph
         if self.use_transformer:
             losses = {
-                'sem_loss': loss_sem if self.context else 0,
-                'part_loss': loss_part if self.context else 0,
-                'cont_loss': loss_cont,
+                'sem_loss': loss_sem.item() if self.context else 0,
+                'part_loss': loss_part.item() if self.context else 0,
+                'cont_loss': loss_cont.item(),
                 'binary_loss': loss_details['binary_loss'],
                 'class_loss': loss_details['class_loss'],
                 'dist_loss': loss_details['dist_loss'],
-                'pal_loss': loss_pix_anchoring,
-                'total_loss': loss
+                'pal_loss': loss_pix_anchoring.item(),
+                'total_loss': loss.item()
             }
         else:
             if self.context:
-                losses = {'sem_loss': loss_sem,
-                        'part_loss': loss_part,
-                        'cont_loss': loss_cont,
-                        'pal_loss': loss_pix_anchoring,
-                        'total_loss': loss}
+                losses = {
+                    'sem_loss': loss_sem.item(),
+                    'part_loss': loss_part.item(),
+                    'cont_loss': loss_cont.item(),
+                    'pal_loss': loss_pix_anchoring.item(),
+                    'total_loss': loss.item()
+                }
             else:
-                losses = {'cont_loss': loss_cont,
-                        'pal_loss': loss_pix_anchoring,
-                        'total_loss': loss}         
+                losses = {
+                    'cont_loss': loss_cont.item(),
+                    'pal_loss': loss_pix_anchoring.item(),
+                    'total_loss': loss.item()
+                }         
 
-        # Prepare output dictionary
+        # Prepare output dictionary - keeping structure similar to original
         if self.context:
             output = {
                 'img': img,
@@ -212,16 +218,18 @@ class TrainStepper():
                 'has_contact_2d': has_polygon_contact_2d,
                 'contact_2d_gt': polygon_contact_2d,
                 'contact_2d_pred_rgb': contact_2d_pred_rgb,
-                'contact_labels_3d_gt': gt_contact_labels_3d,
-                'contact_labels_3d_pred': cont}
+                'contact_labels_3d_gt': semantic_contact if has_semantic_contact.sum() > 0 else gt_contact_labels_3d,
+                'contact_labels_3d_pred': cont
+            }
         else:
             output = {
                 'img': img,
                 'has_contact_2d': has_polygon_contact_2d,
                 'contact_2d_gt': polygon_contact_2d,
                 'contact_2d_pred_rgb': contact_2d_pred_rgb,
-                'contact_labels_3d_gt': gt_contact_labels_3d,
-                'contact_labels_3d_pred': cont}   
+                'contact_labels_3d_gt': semantic_contact if has_semantic_contact.sum() > 0 else gt_contact_labels_3d,
+                'contact_labels_3d_pred': cont
+            }   
 
         return losses, output
 
