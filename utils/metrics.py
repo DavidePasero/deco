@@ -6,10 +6,8 @@ from common.constants import DIST_MATRIX_PATH
 DIST_MATRIX = np.load(DIST_MATRIX_PATH)
 
 def metric(mask, pred, back=True):
-  iou = metrics.compute_meaniou(pred, mask, back, False)
-  iou = iou.mean()
-
-  return iou
+  iou = metrics.compute_iou(pred, mask, back, False)
+  return iou.mean()
 
 def precision_recall_f1score(gt, pred):
     """
