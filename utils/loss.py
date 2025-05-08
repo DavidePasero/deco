@@ -91,14 +91,23 @@ class class_loss_function(nn.Module):
         # self.ce_loss = nn.MultiLabelSoftMarginLoss()
         # self.ce_loss = nn.MultiLabelMarginLoss()
 
-    def forward(self, y_pred, y_true, valid_mask):
-        # y_true = torch.squeeze(y_true, 1).long()
-        # y_true = torch.squeeze(y_true, 1)
-        # y_pred = torch.squeeze(y_pred, 1)
+    def forward(self, y_true, y_pred, valid_mask):
+        # Ensure predictions are in [0,1] range using sigmoid
+        y_pred = torch.sigmoid(y_pred)
+        
         bs = y_true.shape[0]
         if bs != 1:
-            y_pred = y_pred[valid_mask == 1]
-            y_true = y_true[valid_mask == 1]
+            # Only select valid samples based on mask
+            valid_indices = (valid_mask == 1)
+            if valid_indices.sum() > 0:  # Check if there are any valid samples
+                y_pred = y_pred[valid_indices]
+                y_true = y_true[valid_indices]
+            else:
+                return torch.tensor(0.0).to(y_pred.device)
+        
+        # Additional safety check to ensure values are in [0,1]
+        y_pred = torch.clamp(y_pred, 0.0, 1.0)
+        
         if len(y_pred) > 0:
             return self.ce_loss(y_pred, y_true)
         else:

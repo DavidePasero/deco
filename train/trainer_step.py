@@ -29,7 +29,7 @@ class TrainStepper():
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
         self.semantic_contact_loss = SemanticContactLoss().to(device)
-        self.semantic_loss_weight = 0.5  # Weight for semantic loss (between contact and pixel anchoring)
+        self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
     def optimize(self, batch):
         self.model.train()
