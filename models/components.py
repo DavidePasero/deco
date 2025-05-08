@@ -128,3 +128,47 @@ class Classifier(nn.Module):
     def forward(self, x):
         out = self.classifier(x)
         return out.reshape(-1, self.out_dim)
+
+
+class SemanticClassifier(nn.Module):
+    """
+    Classifier for semantic contact prediction - predicts which object class
+    each vertex is in contact with
+    """
+    def __init__(self, in_dim, num_classes=70, num_vertices=6890):
+        super(SemanticClassifier, self).__init__()
+        
+        self.num_classes = num_classes
+        self.num_vertices = num_vertices
+        
+        # First transform features to higher dimension
+        self.feature_transform = nn.Sequential(
+            nn.Linear(in_dim, 1024),
+            nn.ReLU()
+        )
+        
+        # Then predict class probabilities for each vertex
+        self.vertex_classifiers = nn.Linear(1024, num_vertices * num_classes)
+        
+    def forward(self, x):
+        """
+        Args:
+            x: Input features [B, in_dim]
+        Returns:
+            Class logits [B, num_classes, num_vertices]
+        """
+        batch_size = x.shape[0]
+        
+        # Transform features
+        features = self.feature_transform(x)
+        
+        # Predict class probabilities for all vertices
+        vertex_preds = self.vertex_classifiers(features)
+        
+        # Reshape to [B, num_vertices, num_classes]
+        vertex_preds = vertex_preds.view(batch_size, self.num_vertices, self.num_classes)
+        
+        # Transpose to [B, num_classes, num_vertices] to match expected output format
+        vertex_preds = vertex_preds.transpose(1, 2)
+        
+        return vertex_preds

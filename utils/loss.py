@@ -9,7 +9,7 @@ from utils.mesh_utils import save_results_mesh
 from utils.diff_renderer import Pytorch3D
 import os
 import cv2
-
+from utils.metrics import det_error_metric
 
 class sem_loss_function(nn.Module):
     def __init__(self):
@@ -19,6 +19,69 @@ class sem_loss_function(nn.Module):
     def forward(self, y_true, y_pred):
         loss = self.ce(y_pred, y_true)
         return loss
+    
+class MultiClassContactLoss(nn.Module):
+    """
+    Hierarchical loss function for multi-class contact prediction
+    
+    Applies different penalties for:
+    1. Contact/no-contact errors (primary error - high penalty)
+    2. Object class errors (secondary error - lower penalty)
+    """
+    def __init__(self, contact_weight=1.0, class_weight=0.5, dist_weight=0.2):
+        super(MultiClassContactLoss, self).__init__()
+        self.contact_weight = contact_weight  # Weight for binary contact errors
+        self.class_weight = class_weight      # Weight for object class errors
+        self.dist_weight = dist_weight        # Weight for distance-based errors
+        self.bce = nn.BCELoss(reduction='none')
+        
+    def forward(self, pred, target):
+        """
+        Args:
+            pred: Predicted contact probabilities [B, C, V] 
+                  (batch_size, num_classes, num_vertices)
+            target: Ground truth contact labels [B, C, V]
+        
+        Returns:
+            Total loss combining contact detection and class accuracy
+        """
+        batch_size, num_classes, num_vertices = pred.shape
+        
+        # 1. Binary Contact Loss - Any contact vs. no contact
+        # Collapse class dimension to get binary contact prediction
+        pred_any_contact = torch.max(pred, dim=1)[0]  # [B, V]
+        target_any_contact = torch.max(target, dim=1)[0]  # [B, V]
+        
+        binary_loss = self.bce(pred_any_contact, target_any_contact).mean()
+        
+        # 2. Class-specific Contact Loss - Right object class
+        # Only apply to vertices that have contact
+        contact_mask = (target_any_contact > 0).unsqueeze(1).expand(-1, num_classes, -1)  # [B, C, V]
+        
+        if contact_mask.sum() > 0:
+            class_loss = self.bce(pred, target)
+            class_loss = (class_loss * contact_mask).sum() / (contact_mask.sum() + 1e-8)
+        else:
+            class_loss = torch.tensor(0.0).to(pred.device)
+        
+        # 3. Distance-based Loss - Penalize based on geodesic distance
+        # Calculate false positive and false negative distances
+        fp_dist, fn_dist = det_error_metric(pred_any_contact, target_any_contact)
+        dist_loss = (fp_dist.mean() + fn_dist.mean()) / 2.0
+        
+        # Combine losses with weights
+        total_loss = (
+            self.contact_weight * binary_loss + 
+            self.class_weight * class_loss + 
+            self.dist_weight * dist_loss
+        )
+        
+        return total_loss, {
+            'binary_loss': binary_loss.item(),
+            'class_loss': class_loss.item(),
+            'dist_loss': dist_loss.item(),
+            'total_loss': total_loss.item()
+        }
 
 
 class class_loss_function(nn.Module):
@@ -28,7 +91,7 @@ class class_loss_function(nn.Module):
         # self.ce_loss = nn.MultiLabelSoftMarginLoss()
         # self.ce_loss = nn.MultiLabelMarginLoss()
 
-    def forward(self, y_true, y_pred, valid_mask):
+    def forward(self, y_pred, y_true, valid_mask):
         # y_true = torch.squeeze(y_true, 1).long()
         # y_true = torch.squeeze(y_true, 1)
         # y_pred = torch.squeeze(y_pred, 1)
@@ -205,3 +268,47 @@ class pixel_anchoring_function(nn.Module):
         gt_contact_polygon = gt_contact_polygon[valid_mask == 1]
         loss = self.ce_loss(front_view_rgb, gt_contact_polygon)
         return loss, front_view_rgb, front_view_mask
+
+
+class SemanticContactLoss(nn.Module):
+    """
+    Loss function for semantic contact prediction
+    
+    Only applies to vertices that have contact
+    """
+    def __init__(self):
+        super(SemanticContactLoss, self).__init__()
+        self.ce_loss = nn.CrossEntropyLoss(reduction='none')
+        
+    def forward(self, pred, target, contact_mask):
+        """
+        Args:
+            pred: Predicted semantic class probabilities [B, C, V] 
+                  (batch_size, num_classes, num_vertices)
+            target: Ground truth semantic labels [B, C, V]
+            contact_mask: Binary mask of contact vertices [B, V]
+        
+        Returns:
+            Semantic classification loss
+        """
+        batch_size, num_classes, num_vertices = pred.shape
+        
+        # Only compute loss for vertices with contact
+        if contact_mask.sum() > 0:
+            # Convert one-hot target to class indices for CrossEntropyLoss
+            # Find the index of the 1 in each vertex's one-hot encoding
+            target_indices = torch.argmax(target, dim=1)  # [B, V]
+            
+            # Transpose pred to [B, V, C] for easier masking
+            pred_t = pred.transpose(1, 2)  # [B, V, C]
+            
+            # Apply contact mask
+            masked_pred = pred_t[contact_mask]  # [N, C] where N is number of contact vertices
+            masked_target = target_indices[contact_mask]  # [N]
+            
+            # Compute loss
+            loss = self.ce_loss(masked_pred, masked_target).mean()
+        else:
+            loss = torch.tensor(0.0).to(pred.device)
+            
+        return loss

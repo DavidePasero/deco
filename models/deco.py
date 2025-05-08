@@ -1,4 +1,4 @@
-from models.components import Encoder, Cross_Att, Decoder, Classifier
+from models.components import Encoder, Cross_Att, Decoder, Classifier, SemanticClassifier
 import torch.nn as nn
 import torch
 
@@ -18,6 +18,8 @@ class DECO(nn.Module):
             self.part_pool = nn.AdaptiveAvgPool2d((1))
             self.cross_att = Cross_Att(480, 480).to(device)
             self.classif = Classifier(480).to(device)
+            # Add semantic classifier with correct input dimension for hrnet
+            self.semantic_classif = SemanticClassifier(480).to(device)
         elif self.encoder_type == 'swin':
             self.correction_conv = nn.Conv1d(768, 1024, 1).to(device)
             if self.context:    
@@ -25,6 +27,8 @@ class DECO(nn.Module):
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
             self.cross_att = Cross_Att(1024, 1024).to(device)
             self.classif = Classifier(1024).to(device)
+            # Add semantic classifier with correct input dimension for swin
+            self.semantic_classif = SemanticClassifier(1024).to(device)
         else:
             NotImplementedError('Encoder type not implemented')
 
@@ -51,6 +55,12 @@ class DECO(nn.Module):
 
             att = self.cross_att(sem_enc_out, part_enc_out)
             cont = self.classif(att)
+            
+            # Semantic contact prediction
+            semantic_cont = self.semantic_classif(att)
+            # No need for softmax here as it will be applied in the loss function
+            # semantic_cont shape: [B, num_classes, num_vertices]
+            
         else:
             sem_enc_out = self.encoder_sem(img)
             part_enc_out = self.encoder_part(img)
@@ -73,6 +83,12 @@ class DECO(nn.Module):
 
             att = self.cross_att(sem_enc_out, part_enc_out)
             cont = self.classif(att)
-
-        if self.context: return cont, sem_mask_pred, part_mask_pred
-        return cont
+            
+            # Semantic contact prediction
+            semantic_cont = self.semantic_classif(att)
+            # No need for softmax here as it will be applied in the loss function
+            # semantic_cont shape: [B, num_classes, num_vertices]
+        
+        if self.context: 
+            return cont, sem_mask_pred, part_mask_pred, semantic_cont
+        return cont, semantic_cont
