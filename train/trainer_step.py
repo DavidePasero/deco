@@ -347,7 +347,7 @@ class TrainStepper():
 
     def load(self, model_path):
         print(f'~~~ Loading existing checkpoint from {model_path} ~~~')
-        checkpoint = torch.load(model_path)
+        checkpoint = torch.load(model_path, weights_only=False)
         self.model.load_state_dict(checkpoint['deco'], strict=True)
 
         if self.context:
