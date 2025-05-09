@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 from torchvision.transforms import Normalize
 from common import constants
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import SentenceTransformer, util
 import logging
 
