@@ -37,6 +37,8 @@ hparams.TRAINING.DATASET_ROOT_PATH = '/is/cluster/work/achatterjee/rich/npzs'
 hparams.TRAINING.BEST_MODEL_PATH = '/is/cluster/work/achatterjee/weights/rich/exp/rich_exp.pth'
 hparams.TRAINING.LOSS_WEIGHTS = 1.
 hparams.TRAINING.PAL_LOSS_WEIGHTS = 1.
+hparams.TRAINING.SEMANTIC_CLASSIFIER = False
+hparams.TRAINING.SHARED_SEMANTIC_CLASSIFIER = True
 
 # Training hparams
 hparams.VALIDATION = CN()

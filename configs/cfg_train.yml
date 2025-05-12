@@ -20,9 +20,11 @@ TRAINING:
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/demo_train.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco_shared_classifier.pth'
   LOSS_WEIGHTS: 1.
   PAL_LOSS_WEIGHTS: 0.01
+  SEMANTIC_CLASSIFIER: False
+  SHARED_SEMANTIC_CLASSIFIER: True
 VALIDATION:
   SUMMARY_STEPS: 5
   DATASETS: ['damon']

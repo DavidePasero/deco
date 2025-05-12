@@ -172,3 +172,41 @@ class SemanticClassifier(nn.Module):
         vertex_preds = vertex_preds.transpose(1, 2)
         
         return vertex_preds
+
+class SharedSemanticClassifier (nn.Module):
+    def __init__(self, features_dim, num_classes=70):
+        super(SharedSemanticClassifier, self).__init__()
+        
+        self.num_classes = num_classes
+        self.pos_embedding = nn.Embedding(6890, features_dim)
+
+        # First transform features to higher dimension
+        self.feature_transform = nn.Sequential(
+            nn.Linear(features_dim * 2, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, num_classes)
+        )
+                
+    def forward(self, x):
+        """
+        Args:
+            x: Input features [B, in_dim]
+        Returns:
+            Class logits [B, num_classes, num_vertices]
+        """
+        vertex_pos = self.pos_embedding(x["vertex_pos"].long())
+        features = x["features"]
+        batch_size = x.shape[0]
+
+        features = torch.cat([features, vertex_pos], dim=1)
+        
+        # Transform features
+        vertex_preds = self.feature_transform(x)
+                
+        # Reshape to [B, num_vertices, num_classes]
+        vertex_preds = vertex_preds.view(batch_size, 1, self.num_classes)
+        
+        # Transpose to [B, num_classes, num_vertices] to match expected output format
+        vertex_preds = vertex_preds.transpose(1, 2)
+        
+        return vertex_preds

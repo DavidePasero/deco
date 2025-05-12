@@ -7,6 +7,8 @@ import cv2
 import PIL.Image as pil_img
 from loguru import logger
 import shutil
+import matplotlib.pyplot as plt
+from PIL import ImageDraw, ImageFont
 
 import trimesh
 import pyrender
@@ -149,8 +151,11 @@ def main(args):
         img = img[np.newaxis,:,:,:]
         img = torch.tensor(img, dtype = torch.float32).to(device)
 
-        cont, _, _ = deco_model(img)
+        cont, semantic_cont = deco_model(img)
         cont = cont.detach().cpu().numpy().squeeze()
+        semantic_cont = semantic_cont.detach().cpu().numpy()  # [batch, num_classes, num_vertices]
+        
+        # Get contact vertices
         cont_smpl = []
         for indx, i in enumerate(cont):
             if i >= 0.5:
@@ -161,17 +166,58 @@ def main(args):
         img = img * 255		
         img = img.astype(np.uint8)
         
-        contact_smpl = np.zeros((1, 1, 6890))
-        contact_smpl[0][0][cont_smpl] = 1
-
+        # Create mesh with default color
         body_model_smpl = trimesh.load(smpl_path, process=False)
         for vert in range(body_model_smpl.visual.vertex_colors.shape[0]):
             body_model_smpl.visual.vertex_colors[vert] = args.mesh_colour
-        body_model_smpl.visual.vertex_colors[cont_smpl] = args.annot_colour
-
+        
+        # Find which classes are actually present in the predictions
+        if len(cont_smpl) > 0:
+            # For each contact vertex, get the predicted class
+            vertex_classes = {}
+            for vertex_idx in cont_smpl:
+                class_idx = np.argmax(semantic_cont[0, :, vertex_idx])
+                if class_idx not in vertex_classes:
+                    vertex_classes[class_idx] = []
+                vertex_classes[class_idx].append(vertex_idx)
+            
+            # Create colors only for the classes that appear in this image
+            present_classes = sorted(vertex_classes.keys())
+            num_present_classes = len(present_classes)
+            
+            # Create a colormap with distinct colors for the present classes
+            cmap = plt.cm.get_cmap('tab10' if num_present_classes <= 10 else 'tab20', num_present_classes)
+            class_colors = {}
+            for i, class_idx in enumerate(present_classes):
+                # Convert matplotlib color to RGBA
+                r, g, b, a = cmap(i)
+                class_colors[class_idx] = np.array([int(r*255), int(g*255), int(b*255), 255])
+            
+            # Color vertices based on their class
+            for class_idx, vertices in vertex_classes.items():
+                for vertex_idx in vertices:
+                    body_model_smpl.visual.vertex_colors[vertex_idx] = class_colors[class_idx]
+            
+            # Create a legend for the present classes
+            if args.class_names:
+                class_names = {idx: args.class_names[idx] for idx in present_classes}
+            else:
+                class_names = {idx: f"Class {idx}" for idx in present_classes}
+            
+            legend_img = create_color_legend(class_colors, class_names, img.shape[0])
+        else:
+            # No contacts detected
+            legend_img = create_empty_legend(img.shape[0])
+        
+        # Render the mesh
         rend = create_scene(body_model_smpl, img)
+        
+        # Save the rendered image
         os.makedirs(os.path.join(args.out_dir, 'Renders'), exist_ok=True) 
         rend.save(os.path.join(args.out_dir, 'Renders', os.path.basename(img_name).split('.')[0] + '.png'))
+        
+        # Save the legend
+        legend_img.save(os.path.join(args.out_dir, 'Renders', os.path.basename(img_name).split('.')[0] + '_legend.png'))
                   
         out_dir = os.path.join(args.out_dir, 'Preds', os.path.basename(img_name).split('.')[0])
         os.makedirs(out_dir, exist_ok=True)          
@@ -179,6 +225,50 @@ def main(args):
         logger.info(f'Saving mesh to {out_dir}')
         shutil.copyfile(img_name, os.path.join(out_dir, os.path.basename(img_name)))
         body_model_smpl.export(os.path.join(out_dir, 'pred.obj'))
+
+def create_color_legend(class_colors, class_names, height=256):
+    """Create a legend image showing the color mapping for semantic classes"""
+    # Create a PIL image for the legend
+    legend_width = 200
+    box_height = 30
+    legend_height = box_height * len(class_colors)
+    legend = pil_img.new('RGB', (legend_width, legend_height), (255, 255, 255))
+    draw = ImageDraw.Draw(legend)
+    
+    # Try to load a font, use default if not available
+    try:
+        font = ImageFont.truetype("arial.ttf", 14)
+    except IOError:
+        font = ImageFont.load_default()
+    
+    # Draw color boxes and labels
+    for i, (class_idx, color) in enumerate(class_colors.items()):
+        y = i * box_height
+        # Draw colored rectangle
+        draw.rectangle([(10, y + 5), (40, y + 25)], fill=tuple(color[:3]))
+        # Draw class name
+        draw.text((50, y + 10), class_names[class_idx], fill=(0, 0, 0), font=font)
+    
+    # Resize to match the height of the input image if needed
+    if height != legend_height:
+        legend = legend.resize((legend_width, height), pil_img.LANCZOS)
+    
+    return legend
+
+def create_empty_legend(height=256):
+    """Create a legend indicating no contacts were detected"""
+    legend_width = 200
+    legend = pil_img.new('RGB', (legend_width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(legend)
+    
+    try:
+        font = ImageFont.truetype("arial.ttf", 14)
+    except IOError:
+        font = ImageFont.load_default()
+    
+    draw.text((10, height//2), "No contacts detected", fill=(0, 0, 0), font=font)
+    
+    return legend
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
