@@ -1,4 +1,4 @@
-from models.components import Encoder, Cross_Att, Decoder, Classifier, SemanticClassifier, SharedSemanticClassifier, ParallelSemanticClassifier
+from models.components import Encoder, Cross_Att, Decoder, Classifier, SemanticClassifier, SharedSemanticClassifier
 import torch.nn as nn
 import torch
 
