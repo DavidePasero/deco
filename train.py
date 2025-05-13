@@ -6,11 +6,19 @@ from train.trainer_step import TrainStepper
 from train.base_trainer import trainer, evaluator
 from data.base_dataset import BaseDataset
 from data.mixed_dataset import MixedDataset
-from models.deco import DECO
+from models.deco import DECO, DINOContact
 from utils.config import parse_args, run_grid_search_experiments
 
 def train(hparams):
-    deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device)
+    if hparams.TRAINING.MODEL_TYPE == 'deco':
+        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device, hparams.classifier_type) # set up DinoContact here
+    elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
+        deco_model = DINOContact(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device)
+    else:
+        raise ValueError('Model type not supported')
+    
+    if isinstance(deco_model, DINOContact):
+        hparams.TRAINING.CONTEXT = False
 
     solver = TrainStepper(deco_model, hparams.TRAINING.CONTEXT, hparams.OPTIMIZER.LR, hparams.TRAINING.LOSS_WEIGHTS, hparams.TRAINING.PAL_LOSS_WEIGHTS, device)
 

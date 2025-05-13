@@ -2,12 +2,15 @@ import torch
 import torchvision
 import torch.nn as nn
 import numpy as np
+from transformers import AutoImageProcessor, AutoModel
 
 from utils.hrnet import hrnet_w32
 
 class Encoder(nn.Module):
-    def __init__(self, encoder='hrnet', pretrained=True):
+    def __init__(self, encoder='hrnet', pretrained=True, device="cuda"):
         super(Encoder, self).__init__()
+
+        self.encoder_name = encoder
 
         if encoder == 'swin':
             '''Swin Transformer encoder'''
@@ -16,10 +19,19 @@ class Encoder(nn.Module):
         elif encoder == 'hrnet':
             '''HRNet encoder'''
             self.encoder = hrnet_w32(pretrained=pretrained)
+        elif "dinov2" in encoder:
+            #self.processor = AutoImageProcessor.from_pretrained('facebook/dinov2-large')
+            self.encoder = AutoModel.from_pretrained('facebook/dinov2-giant').to(device)
         else:
             raise NotImplementedError('Encoder not implemented')
 
     def forward(self, x):
+        if self.encoder_name == "dinov2":
+            outputs = self.encoder(x)
+            last_hidden_states = outputs.last_hidden_state
+            cls_token_embedding = last_hidden_states[:, 0]
+            return cls_token_embedding
+
         out = self.encoder(x)
         return out  
 
@@ -104,8 +116,20 @@ class Decoder(nn.Module):
                 # nn.BatchNorm2d(out_dim),
                 nn.Softmax(1)
             )
+        elif encoder == "dinov2":
+            self.upsample = nn.Sequential(
+                nn.ConvTranspose2d(in_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.BatchNorm2d(out_dim),
+                nn.ReLU(),
+                nn.ConvTranspose2d(out_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.BatchNorm2d(out_dim),
+                nn.ReLU(),
+                nn.ConvTranspose2d(out_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.BatchNorm2d(out_dim),
+                nn.Softmax(1)
+            )
         else:
-            raise NotImplementedError('Decoder not implemented')
+            raise NotImplementedError("Decoder not implemented!")
 
     def forward(self, x):
         out = self.upsample(x)

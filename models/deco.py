@@ -9,9 +9,9 @@ class DECO(nn.Module):
         self.context = context
         self.classifier_type = classifier_type
 
-        self.encoder_sem = Encoder(encoder=encoder).to(device)
-        self.encoder_part = Encoder(encoder=encoder).to(device)
         if self.encoder_type == 'hrnet':
+            self.encoder_sem = Encoder(encoder=encoder).to(device)
+            self.encoder_part = Encoder(encoder=encoder).to(device) 
             if self.context:    
                 self.decoder_sem = Decoder(480, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(480, 26, encoder=encoder).to(device)
@@ -25,6 +25,8 @@ class DECO(nn.Module):
                 # Add semantic classifier with correct input dimension for hrnet
                 self.semantic_classif = SemanticClassifier(480).to(device)
         elif self.encoder_type == 'swin':
+            self.encoder_sem = Encoder(encoder=encoder).to(device)
+            self.encoder_part = Encoder(encoder=encoder).to(device)     
             self.correction_conv = nn.Conv1d(768, 1024, 1).to(device)
             if self.context:    
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
@@ -36,6 +38,24 @@ class DECO(nn.Module):
                 self.semantic_classif = SharedSemanticClassifier(1024).to(device)
             else:
                 self.semantic_classif = SemanticClassifier(1024).to(device)
+
+        elif self.encoder_type == "dinov2":
+
+            self.encoder = Encoder(encoder="dinov2", device=device)
+            if self.context:
+                self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
+                self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
+
+            self.scene_projector = nn.Linear(1536, 480).to(device)
+            self.contact_projector = nn.Linear(1536, 480).to(device)
+            self.cross_att = Cross_Att(480, 480).to(device)
+            self.classif = Classifier(480).to(device)
+            # Add semantic classifier with correct input dimension for swin
+            if self.classifier_type == 'shared':
+                self.semantic_classif = SharedSemanticClassifier(480).to(device)
+            else:
+                self.semantic_classif = SemanticClassifier(480).to(device)
+
         else:
             NotImplementedError('Encoder type not implemented')
 
@@ -62,7 +82,18 @@ class DECO(nn.Module):
 
             att = self.cross_att(sem_enc_out, part_enc_out)
             cont = self.classif(att)
-            
+
+        elif self.encoder_type == "dinov2":
+            with torch.no_grad():
+                features = self.encoder(img)
+
+            sem_enc_out = self.scene_projector(features)
+            part_enc_out = self.contact_projector(features)
+
+            att = self.cross_att(sem_enc_out.unsqueeze(1), part_enc_out.unsqueeze(1))
+            cont = self.classif(att)
+
+
         else:
             sem_enc_out = self.encoder_sem(img)
             part_enc_out = self.encoder_part(img)
@@ -137,3 +168,25 @@ class DECO(nn.Module):
         if self.context: 
             return cont, sem_mask_pred, part_mask_pred, semantic_cont
         return cont, semantic_cont
+
+
+
+class DINOContact(nn.Module):
+    def __init__(self, device: str = "cuda", classifier_type: str = "shared", *args, **kwargs):
+        super(DINOContact, self).__init__()
+        self.device = device
+        self.classifier = Classifier(1536).to(device)
+        self.semantic_classif = SemanticClassifier(1536).to(device) if classifier_type is "shared" else None
+        self.encoder = Encoder(encoder="dinov2")
+
+    def forward(self, x):
+        with torch.no_grad():
+            features = self.encoder(x)
+
+        cont = self.classifier(features)
+
+        if self.semantic_classif is not None:
+            sem_cont = self.semantic_classif(features)
+            return cont, sem_cont
+
+        return cont

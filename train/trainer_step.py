@@ -4,6 +4,8 @@ import os
 import time
 
 
+
+
 class TrainStepper():
     def __init__(self, deco_model, context, learning_rate, loss_weight, pal_loss_weight, device):
         self.device = device
@@ -11,15 +13,39 @@ class TrainStepper():
         self.model = deco_model
         self.context = context
 
+
         if self.context:
-            self.optimizer_sem = torch.optim.Adam(params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()),
-                                                lr=learning_rate, weight_decay=0.0001)
+            if self.model.encoder_type == "dinov2":
+                self.optimizer_sem = torch.optim.Adam(
+                    params=list(self.model.decoder_sem.parameters()),
+                    lr=learning_rate, weight_decay=0.0001)
+                self.optimizer_part = torch.optim.Adam(
+                    params=list(self.model.decoder_part.parameters()),
+                    lr=learning_rate,
+                    weight_decay=0.0001)
+
+        else:
+            self.optimizer_sem = torch.optim.Adam(
+                params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()),
+                lr=learning_rate, weight_decay=0.0001)
             self.optimizer_part = torch.optim.Adam(
                 params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()), lr=learning_rate,
                 weight_decay=0.0001)
-        self.optimizer_contact = torch.optim.Adam(
-            params=list(self.model.encoder_sem.parameters()) + list(self.model.encoder_part.parameters()) + list(
-                self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate, weight_decay=0.0001)
+
+        if self.model.encoder_type == "dinov2":
+            self.optimizer_contact = torch.optim.Adam(
+                params=list(self.model.scene_projector.parameters()) + list(self.model.contact_projector.parameters()) + list(
+                    self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate,
+                weight_decay=0.0001)
+        else:
+            if self.model.encoder_type == "dinov2":
+                self.optimizer_contact = torch.optim.Adam(
+                    params=list(self.model.classif.parameters()), lr=learning_rate,
+                    weight_decay=0.0001)
+            else:
+                self.optimizer_contact = torch.optim.Adam(
+                    params=list(self.model.encoder_sem.parameters()) + list(self.model.encoder_part.parameters()) + list(
+                        self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate, weight_decay=0.0001)
 
         if self.context: self.sem_loss = sem_loss_function().to(device)
         self.class_loss = class_loss_function().to(device)

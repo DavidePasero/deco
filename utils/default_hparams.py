@@ -25,7 +25,9 @@ hparams.OPTIMIZER.NUM_UPDATE_LR = 10
 
 # Training hparams
 hparams.TRAINING = CN()
-hparams.TRAINING.ENCODER = 'hrnet'
+hparams.TRAINING.MODEL_TYPE = 'deco'
+hparams.TRAINING.ENCODER = 'dinov2'
+hparams.TRAINING.CLASSIFIER_TYPE = 'shared'
 hparams.TRAINING.CONTEXT = True
 hparams.TRAINING.NUM_EPOCHS = 50
 hparams.TRAINING.SUMMARY_STEPS = 100
