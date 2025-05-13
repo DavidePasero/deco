@@ -18,6 +18,20 @@ from common import constants
 
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
 
+object_classes = [
+    'airplane', 'apple', 'backpack', 'banana', 'baseball_bat', 'baseball_glove', 
+    'bed', 'bench', 'bicycle', 'boat', 'book', 'bottle', 'bowl', 'broccoli', 
+    'bus', 'cake', 'car', 'carrot', 'cell_phone', 'chair', 'clock', 'couch', 
+    'cup', 'dining_table', 'donut', 'fire_hydrant', 'fork', 'frisbee', 
+    'hair_drier', 'handbag', 'hot_dog', 'keyboard', 'kite', 'knife', 'laptop', 
+    'microwave', 'motorcycle', 'mouse', 'orange', 'oven', 'parking_meter', 
+    'pizza', 'potted_plant', 'refrigerator', 'remote', 'sandwich', 'scissors', 
+    'sink', 'skateboard', 'skis', 'snowboard', 'spoon', 'sports_ball', 
+    'stop_sign', 'suitcase', 'supporting', 'surfboard', 'teddy_bear', 
+    'tennis_racket', 'tie', 'toaster', 'toilet', 'toothbrush', 'traffic_light', 
+    'train', 'truck', 'tv', 'umbrella', 'vase', 'wine_glass'
+]
+
 if torch.cuda.is_available():
     device = torch.device('cuda')
 else:
@@ -27,7 +41,7 @@ def initiate_model(args):
     deco_model = DECO('hrnet', True, device)
 
     logger.info(f'Loading weights from {args.model_path}')
-    checkpoint = torch.load(args.model_path)
+    checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
     deco_model.load_state_dict(checkpoint['deco'], strict=True)
 
     deco_model.eval()
@@ -151,7 +165,7 @@ def main(args):
         img = img[np.newaxis,:,:,:]
         img = torch.tensor(img, dtype = torch.float32).to(device)
 
-        cont, semantic_cont = deco_model(img)
+        cont, _, _, semantic_cont = deco_model(img)
         cont = cont.detach().cpu().numpy().squeeze()
         semantic_cont = semantic_cont.detach().cpu().numpy()  # [batch, num_classes, num_vertices]
         
@@ -172,42 +186,36 @@ def main(args):
             body_model_smpl.visual.vertex_colors[vert] = args.mesh_colour
         
         # Find which classes are actually present in the predictions
-        if len(cont_smpl) > 0:
-            # For each contact vertex, get the predicted class
-            vertex_classes = {}
-            for vertex_idx in cont_smpl:
-                class_idx = np.argmax(semantic_cont[0, :, vertex_idx])
-                if class_idx not in vertex_classes:
-                    vertex_classes[class_idx] = []
-                vertex_classes[class_idx].append(vertex_idx)
-            
-            # Create colors only for the classes that appear in this image
-            present_classes = sorted(vertex_classes.keys())
-            num_present_classes = len(present_classes)
-            
-            # Create a colormap with distinct colors for the present classes
-            cmap = plt.cm.get_cmap('tab10' if num_present_classes <= 10 else 'tab20', num_present_classes)
-            class_colors = {}
-            for i, class_idx in enumerate(present_classes):
-                # Convert matplotlib color to RGBA
-                r, g, b, a = cmap(i)
-                class_colors[class_idx] = np.array([int(r*255), int(g*255), int(b*255), 255])
-            
-            # Color vertices based on their class
-            for class_idx, vertices in vertex_classes.items():
-                for vertex_idx in vertices:
-                    body_model_smpl.visual.vertex_colors[vertex_idx] = class_colors[class_idx]
-            
-            # Create a legend for the present classes
-            if args.class_names:
-                class_names = {idx: args.class_names[idx] for idx in present_classes}
-            else:
-                class_names = {idx: f"Class {idx}" for idx in present_classes}
-            
-            legend_img = create_color_legend(class_colors, class_names, img.shape[0])
-        else:
-            # No contacts detected
-            legend_img = create_empty_legend(img.shape[0])
+        # Build per‑vertex → class mapping
+        vertex_classes = {}
+        for vertex_idx in cont_smpl:                       # cont_smpl from your loop
+            class_idx = int(np.argmax(semantic_cont[0, :, vertex_idx]))
+            vertex_classes.setdefault(class_idx, []).append(vertex_idx)
+
+        # Create a palette for the classes that really appear
+        present_classes = sorted(vertex_classes.keys())
+        num_present      = len(present_classes)
+        cmap_name        = 'tab10' if num_present <= 10 else 'tab20'
+        cmap             = plt.cm.get_cmap(cmap_name, num_present)
+
+        class_colors = {
+            class_idx: np.array([*(np.asarray(cmap(i)[:3]) * 255).astype(int), 255])
+            for i, class_idx in enumerate(present_classes)
+        }
+
+        # Apply colors to the mesh
+        for class_idx, vertices in vertex_classes.items():
+            body_model_smpl.visual.vertex_colors[vertices] = class_colors[class_idx]
+
+        # ---------- NEW: build class‑name dictionary here ----------
+        # Build class‑name dictionary using the global `object_classes` list
+        class_names = {
+            idx: object_classes[idx] if idx < len(object_classes) else f"Class {idx}"
+            for idx in present_classes
+        }
+
+        # Create the colour legend
+        legend_img = create_color_legend(class_colors, class_names, img.shape[0])
         
         # Render the mesh
         rend = create_scene(body_model_smpl, img)
@@ -274,7 +282,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--img_src', help='Source of image(s). Can be file or directory', default='./demo_out', type=str)
     parser.add_argument('--out_dir', help='Where to store images', default='./demo_out', type=str)
-    parser.add_argument('--model_path', help='Path to best model weights', default='./checkpoints/Release_Checkpoint/deco_best.pth', type=str)
+    parser.add_argument('--model_path', help='Path to best model weights', default='./checkpoints/Other_Checkpoints/deco_shared_classifier_best.pth', type=str)
     parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+', type=int, default=[130, 130, 130, 255])
     parser.add_argument('--annot_colour', help='Colour of the mesh', nargs='+', type=int, default=[0, 255, 0, 255])
     args = parser.parse_args()
