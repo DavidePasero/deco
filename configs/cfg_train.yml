@@ -1,4 +1,4 @@
-EXP_NAME: 'deco_shared_classifier'
+EXP_NAME: 'deco_with_dino'
 PROJECT_NAME: 'DECO_demo_training'
 OUTPUT_DIR: 'deco_results'
 CONDOR_DIR: ''

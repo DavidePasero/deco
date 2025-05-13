@@ -17,7 +17,7 @@ def trainer(epoch, train_loader, solver, hparams, compute_metrics=False):
     return losses, output
 
 @torch.no_grad()
-def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', normalize=True, return_dict=False):
+def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', normalize=True, return_dict=False): #TODO needs to bed adjsuted for semantics
     total_epochs = hparams.TRAINING.NUM_EPOCHS
 
     batch_size = val_loader.batch_size

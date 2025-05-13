@@ -13,7 +13,7 @@ from PIL import ImageDraw, ImageFont
 import trimesh
 import pyrender
 
-from models.deco import DECO
+from models.deco import DECO, DINOContact
 from common import constants
 
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
@@ -38,7 +38,13 @@ else:
     device = torch.device('cpu')
 
 def initiate_model(args):
-    deco_model = DECO('hrnet', True, device)
+    if args.model_type == 'deco':
+        deco_model = DECO(args.encoder, args.context, args.device,
+                          args.classifier_type)  # set up DinoContact here
+    elif args.model_type ==  'dinoContact':
+        deco_model = DINOContact(args.device)
+    else:
+        raise ValueError('Model type not supported')
 
     logger.info(f'Loading weights from {args.model_path}')
     checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
@@ -279,12 +285,30 @@ def create_empty_legend(height=256):
     return legend
 
 if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--img_src', help='Source of image(s). Can be file or directory', default='./demo_out', type=str)
-    parser.add_argument('--out_dir', help='Where to store images', default='./demo_out', type=str)
-    parser.add_argument('--model_path', help='Path to best model weights', default='./checkpoints/Other_Checkpoints/deco_shared_classifier_best.pth', type=str)
-    parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+', type=int, default=[130, 130, 130, 255])
-    parser.add_argument('--annot_colour', help='Colour of the mesh', nargs='+', type=int, default=[0, 255, 0, 255])
-    args = parser.parse_args()
+    if __name__ == '__main__':
+        parser = argparse.ArgumentParser(description="3D Mesh Rendering and Semantic Contact Visualization")
+        parser.add_argument('--img_src', help='Source of image(s). Can be file or directory',
+                            default='./demo_out', type=str)
+        parser.add_argument('--out_dir', help='Where to store images',
+                            default='./demo_out', type=str)
+        parser.add_argument('--model_path', help='Path to best model weights',
+                            default='./checkpoints/Other_Checkpoints/deco_shared_classifier_best.pth', type=str)
+        parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+',
+                            type=int, default=[130, 130, 130, 255])
+        parser.add_argument('--annot_colour', help='Colour of the annotation', nargs='+',
+                            type=int, default=[0, 255, 0, 255])
+        parser.add_argument('--model_type', help='Type of the model to load (deco or dinoContact)',
+                            default='deco', type=str)
+        parser.add_argument('--encoder', help='Flag to train the encoder',
+                            type=str, default="hrnet")
+        parser.add_argument('--context', help='Flag to train the context model',
+                            action='store_true')
+        parser.add_argument('--classifier_type', help='Classifier type for the model',
+                            default='shared', type=str)
+        parser.add_argument('--device', help='Device to use (cuda or cpu)',
+                            default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+
+        args = parser.parse_args()
+        main(args)
 
     main(args)
