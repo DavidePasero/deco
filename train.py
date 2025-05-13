@@ -11,9 +11,9 @@ from utils.config import parse_args, run_grid_search_experiments
 
 def train(hparams):
     if hparams.TRAINING.MODEL_TYPE == 'deco':
-        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device, hparams.classifier_type) # set up DinoContact here
+        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device, hparams.TRAINING.CLASSIFIER_TYPE) # set up DinoContact here
     elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
-        deco_model = DINOContact(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device)
+        deco_model = DINOContact(device)
     else:
         raise ValueError('Model type not supported')
     

@@ -40,21 +40,22 @@ class DECO(nn.Module):
                 self.semantic_classif = SemanticClassifier(1024).to(device)
 
         elif self.encoder_type == "dinov2":
+            self.correction_conv = nn.Conv1d(1536, 1024, 1).to(device)
 
             self.encoder = Encoder(encoder="dinov2", device=device)
             if self.context:
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
 
-            self.scene_projector = nn.Linear(1536, 480).to(device)
-            self.contact_projector = nn.Linear(1536, 480).to(device)
-            self.cross_att = Cross_Att(480, 480).to(device)
-            self.classif = Classifier(480).to(device)
+            self.scene_projector = nn.Linear(1536, 1024).to(device)
+            self.contact_projector = nn.Linear(1536, 1024).to(device)
+            self.cross_att = Cross_Att(1024, 1024).to(device)
+            self.classif = Classifier(1024).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(480).to(device)
+                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(480).to(device)
+                self.semantic_classif = SemanticClassifier(1024).to(device)
 
         else:
             NotImplementedError('Encoder type not implemented')
@@ -90,9 +91,14 @@ class DECO(nn.Module):
             sem_enc_out = self.scene_projector(features)
             part_enc_out = self.contact_projector(features)
 
+            if self.context:
+                sem_seg = torch.reshape(sem_enc_out, (-1, 1, 32, 32))
+                part_seg = torch.reshape(part_enc_out, (-1, 1, 32, 32))
+                sem_mask_pred = self.decoder_sem(sem_seg)
+                part_mask_pred = self.decoder_part(part_seg)
+
             att = self.cross_att(sem_enc_out.unsqueeze(1), part_enc_out.unsqueeze(1))
             cont = self.classif(att)
-
 
         else:
             sem_enc_out = self.encoder_sem(img)
@@ -164,9 +170,10 @@ class DECO(nn.Module):
         else:  
             # Semantic contact prediction
             semantic_cont = self.semantic_classif(att)
-        
+
         if self.context: 
             return cont, sem_mask_pred, part_mask_pred, semantic_cont
+
         return cont, semantic_cont
 
 

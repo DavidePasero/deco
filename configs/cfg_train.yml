@@ -3,7 +3,7 @@ PROJECT_NAME: 'DECO_demo_training'
 OUTPUT_DIR: 'deco_results'
 CONDOR_DIR: ''
 DATASET:
-  BATCH_SIZE: 16
+  BATCH_SIZE: 8
   NUM_WORKERS: 8
   NORMALIZE_IMAGES: [True]
 OPTIMIZER:
@@ -12,6 +12,7 @@ OPTIMIZER:
   NUM_UPDATE_LR: 3
 TRAINING:
   ENCODER: 'dinov2'
+  MODEL_TYPE: "deco"
   CONTEXT: [True]
   NUM_EPOCHS: 100
   NUM_EARLY_STOP: 10
@@ -20,11 +21,12 @@ TRAINING:
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco_shared_classifier.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco_with_dino.pth'
   LOSS_WEIGHTS: 1.
   PAL_LOSS_WEIGHTS: 0.01
-  SEMANTIC_CLASSIFIER: False
+  SEMANTIC_CLASSIFIER: True
   SHARED_SEMANTIC_CLASSIFIER: True
+  CLASSIFIER_TYPE: "shared"
 VALIDATION:
   SUMMARY_STEPS: 5
   DATASETS: ['damon']

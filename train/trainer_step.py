@@ -13,39 +13,42 @@ class TrainStepper():
         self.model = deco_model
         self.context = context
 
-
-        if self.context:
-            if self.model.encoder_type == "dinov2":
-                self.optimizer_sem = torch.optim.Adam(
-                    params=list(self.model.decoder_sem.parameters()),
-                    lr=learning_rate, weight_decay=0.0001)
-                self.optimizer_part = torch.optim.Adam(
-                    params=list(self.model.decoder_part.parameters()),
-                    lr=learning_rate,
-                    weight_decay=0.0001)
-
-        else:
-            self.optimizer_sem = torch.optim.Adam(
-                params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()),
-                lr=learning_rate, weight_decay=0.0001)
-            self.optimizer_part = torch.optim.Adam(
-                params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()), lr=learning_rate,
-                weight_decay=0.0001)
-
-        if self.model.encoder_type == "dinov2":
+        if deco_model.__class__.__name__ == 'DINOContact': # Check if we are using simply DINOContact
             self.optimizer_contact = torch.optim.Adam(
-                params=list(self.model.scene_projector.parameters()) + list(self.model.contact_projector.parameters()) + list(
-                    self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate,
+                params=list(self.model.classifier.parameters()), lr=learning_rate,
                 weight_decay=0.0001)
-        else:
-            if self.model.encoder_type == "dinov2":
+        elif deco_model.__class__.__name__ == 'DECO':
+            if self.context:
+                if self.model.encoder_type == "dinov2":
+                    self.optimizer_sem = torch.optim.Adam(
+                        params=list(self.model.scene_projector.parameters()) +
+                               list(self.model.decoder_sem.parameters()),
+                        lr=learning_rate, weight_decay=0.0001)
+                    self.optimizer_part = torch.optim.Adam(
+                        params=list(self.model.decoder_part.parameters()) +
+                               list(self.model.contact_projector.parameters()),
+                        lr=learning_rate,
+                        weight_decay=0.0001)
+                else:
+                    self.optimizer_sem = torch.optim.Adam(
+                        params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()),
+                        lr=learning_rate, weight_decay=0.0001)
+                    self.optimizer_part = torch.optim.Adam(
+                        params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()), lr=learning_rate,
+                        weight_decay=0.0001)
+
+            if self.model.encoder_type == "dinov2": # Check if DECO has DINO encoder, if so we need to use the feature projectors in the optimizer
                 self.optimizer_contact = torch.optim.Adam(
-                    params=list(self.model.classif.parameters()), lr=learning_rate,
+                    params=list(self.model.scene_projector.parameters()) + list(self.model.contact_projector.parameters()) + list(
+                        self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate,
                     weight_decay=0.0001)
             else:
                 self.optimizer_contact = torch.optim.Adam(
                     params=list(self.model.encoder_sem.parameters()) + list(self.model.encoder_part.parameters()) + list(
                         self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate, weight_decay=0.0001)
+
+        else:
+            raise NotImplementedError(f"The model {deco_model.__class__.__name__ } is not supported")
 
         if self.context: self.sem_loss = sem_loss_function().to(device)
         self.class_loss = class_loss_function().to(device)
