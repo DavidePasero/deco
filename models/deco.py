@@ -1,13 +1,27 @@
 from models.components import Encoder, Cross_Att, Decoder, Classifier, SemanticClassifier, SharedSemanticClassifier
 import torch.nn as nn
 import torch
+from dataclasses import dataclass
+
+@dataclass
+class DINOv2DIM:
+    LARGE: int = 1024
+    GIANT: int = 1536
+
+DINOv2NAME_TO_HIDDEN_DIM = {
+    "dinov2-large": DINOv2DIM.LARGE,
+    "dinov2-giant": DINOv2DIM.GIANT
+}
+
 
 class DECO(nn.Module):
-    def __init__(self, encoder, context, device, classifier_type='shared'):
+    def __init__(self, encoder, context, device, classifier_type='shared',
+                 train_backbone: bool = False, num_encoders: int = 1):
         super(DECO, self).__init__()
         self.encoder_type = encoder
         self.context = context
         self.classifier_type = classifier_type
+        self.train_backbone = train_backbone
 
         if self.encoder_type == 'hrnet':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
@@ -39,16 +53,24 @@ class DECO(nn.Module):
             else:
                 self.semantic_classif = SemanticClassifier(1024).to(device)
 
-        elif self.encoder_type == "dinov2":
-            self.correction_conv = nn.Conv1d(1536, 1024, 1).to(device)
+        elif "dinov2" in self.encoder_type:
+            self.num_encoder = num_encoders
+            hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type]
 
-            self.encoder = Encoder(encoder="dinov2", device=device)
+            if self.num_encoder > 1:
+                self.encoder_sem = Encoder(encoder=self.encoder_type).to(device)
+                self.encoder_part = Encoder(encoder=self.encoder_type).to(device)
+            else:
+                self.encoder = Encoder(encoder=self.encoder_type, device=device)
+                self.scene_projector = nn.Linear(hidden_dim, 1024).to(device)
+                self.contact_projector = nn.Linear(hidden_dim, 1024).to(device)
+
+            self.correction_conv = nn.Conv1d(hidden_dim, 1024, 1).to(device)
+
             if self.context:
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
 
-            self.scene_projector = nn.Linear(1536, 1024).to(device)
-            self.contact_projector = nn.Linear(1536, 1024).to(device)
             self.cross_att = Cross_Att(1024, 1024).to(device)
             self.classif = Classifier(1024).to(device)
             # Add semantic classifier with correct input dimension for swin
@@ -84,21 +106,16 @@ class DECO(nn.Module):
             att = self.cross_att(sem_enc_out, part_enc_out)
             cont = self.classif(att)
 
-        elif self.encoder_type == "dinov2":
-            with torch.no_grad():
-                features = self.encoder(img)
-
-            sem_enc_out = self.scene_projector(features)
-            part_enc_out = self.contact_projector(features)
+        elif  "dinov2" in self.encoder_type:
+            if self.num_encoders > 1:
+                out = self._dinov2_forward_pass_two_encoders(img)
+            else:
+                out = self._dinov2_forward_pass_shared_encoder(img)
 
             if self.context:
-                sem_seg = torch.reshape(sem_enc_out, (-1, 1, 32, 32))
-                part_seg = torch.reshape(part_enc_out, (-1, 1, 32, 32))
-                sem_mask_pred = self.decoder_sem(sem_seg)
-                part_mask_pred = self.decoder_part(part_seg)
-
-            att = self.cross_att(sem_enc_out.unsqueeze(1), part_enc_out.unsqueeze(1))
-            cont = self.classif(att)
+                att, cont, sem_mask_pred, part_mask_pred = out
+            else:
+                att, cont = out
 
         else:
             sem_enc_out = self.encoder_sem(img)
@@ -176,19 +193,77 @@ class DECO(nn.Module):
 
         return cont, semantic_cont
 
+    def _dinov2_forward_pass_shared_encoder(self, img):
+        if self.train_backbone:
+            features = self.encoder(img)
+        else:
+            with torch.no_grad():
+                features = self.encoder(img)
+
+        sem_enc_out = self.scene_projector(features)
+        part_enc_out = self.contact_projector(features)
+
+        if self.context:
+            sem_seg = torch.reshape(sem_enc_out, (-1, 1, 32, 32))
+            part_seg = torch.reshape(part_enc_out, (-1, 1, 32, 32))
+            sem_mask_pred = self.decoder_sem(sem_seg)
+            part_mask_pred = self.decoder_part(part_seg)
+
+        att = self.cross_att(sem_enc_out.unsqueeze(1), part_enc_out.unsqueeze(1))
+        cont = self.classif(att)
+
+        if self.context:
+            return att, cont, sem_mask_pred, part_mask_pred
+
+        return att, cont
+
+    def _dinov2_forward_pass_two_encoders(self, img):
+        sem_enc_out = self.encoder_sem(img)
+        part_enc_out = self.encoder_part(img)
+
+        sem_seg = torch.reshape(sem_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+        part_seg = torch.reshape(part_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+
+        sem_seg = self.correction_conv(sem_seg)
+        part_seg = self.correction_conv(part_seg)
+
+        sem_seg = torch.reshape(sem_seg, (-1, 1, 32, 32))
+        part_seg = torch.reshape(part_seg, (-1, 1, 32, 32))
+
+        if self.context:
+            sem_mask_pred = self.decoder_sem(sem_seg)
+            part_mask_pred = self.decoder_part(part_seg)
+
+        sem_enc_out = torch.reshape(sem_seg, (-1, 1, 1024))
+        part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
+
+        att = self.cross_att(sem_enc_out, part_enc_out)
+        cont = self.classif(att)
+
+        if self.context:
+            return att, cont, sem_mask_pred, part_mask_pred
+
+        return att, cont
 
 
 class DINOContact(nn.Module):
-    def __init__(self, device: str = "cuda", classifier_type: str = "shared", *args, **kwargs):
+    def __init__(self, device: str = "cuda", encoder_name: str = "dinov2-large",
+                 classifier_type: str = "shared", train_backbone: bool = False,
+                 *args, **kwargs):
         super(DINOContact, self).__init__()
         self.device = device
-        self.classifier = Classifier(1536).to(device)
-        self.semantic_classif = SemanticClassifier(1536).to(device) if classifier_type is "shared" else None
-        self.encoder = Encoder(encoder="dinov2")
+        self.encoder = Encoder(encoder=encoder_name)
+        hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[encoder_name]
+        self.classifier = Classifier(hidden_dim).to(device)
+        self.semantic_classif = SemanticClassifier(hidden_dim).to(device) if classifier_type is "shared" else None
+        self.train_backbone = train_backbone
 
     def forward(self, x):
-        with torch.no_grad():
+        if self.train_backbone:
             features = self.encoder(x)
+        else:
+            with torch.no_grad():
+                features = self.encoder(x)
 
         cont = self.classifier(features)
 

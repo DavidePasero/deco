@@ -1,4 +1,4 @@
-EXP_NAME: 'deco_with_dino'
+EXP_NAME: 'deco-dino'
 PROJECT_NAME: 'DECO_demo_training'
 OUTPUT_DIR: 'deco_results'
 CONDOR_DIR: ''
@@ -9,24 +9,26 @@ DATASET:
 OPTIMIZER:
   TYPE: 'adam'
   LR: [1e-5]
-  NUM_UPDATE_LR: 3
+  NUM_UPDATE_LR: 30
 TRAINING:
-  ENCODER: 'dinov2'
+  ENCODER: 'dinov2-giant'
+  NUM_ENCODER: 1
   MODEL_TYPE: "deco"
   CONTEXT: [True]
   NUM_EPOCHS: 100
-  NUM_EARLY_STOP: 10
+  NUM_EARLY_STOP: 50
   SUMMARY_STEPS: 5
   CHECKPOINT_EPOCHS: 5
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco_with_dino.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco-dino.pth'
   LOSS_WEIGHTS: 1.
   PAL_LOSS_WEIGHTS: 0.01
   SEMANTIC_CLASSIFIER: True
   SHARED_SEMANTIC_CLASSIFIER: True
   CLASSIFIER_TYPE: "shared"
+  TRAIN_BACKBONE: False #only for DINO backbone
 VALIDATION:
   SUMMARY_STEPS: 5
   DATASETS: ['damon']

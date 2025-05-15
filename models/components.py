@@ -21,12 +21,13 @@ class Encoder(nn.Module):
             self.encoder = hrnet_w32(pretrained=pretrained)
         elif "dinov2" in encoder:
             #self.processor = AutoImageProcessor.from_pretrained('facebook/dinov2-large')
-            self.encoder = AutoModel.from_pretrained('facebook/dinov2-giant').to(device)
+            assert encoder in ("dinov2-giant", "dinov2-large", "dinov2-small", "dinov2-base"), "Encoder name must be in dinov2-giant, dinov2-large, dinov2-small, dinov2-base"
+            self.encoder = AutoModel.from_pretrained(f'facebook/{encoder}').to(device)
         else:
             raise NotImplementedError('Encoder not implemented')
 
     def forward(self, x):
-        if self.encoder_name == "dinov2":
+        if "dinov2" in self.encoder_name:
             outputs = self.encoder(x)
             last_hidden_states = outputs.last_hidden_state
             cls_token_embedding = last_hidden_states[:, 0]
@@ -116,7 +117,7 @@ class Decoder(nn.Module):
                 # nn.BatchNorm2d(out_dim),
                 nn.Softmax(1)
             )
-        elif encoder == "dinov2":
+        elif "dinov2" in encoder:
             self.upsample = nn.Sequential(
                 nn.ConvTranspose2d(in_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
                 nn.BatchNorm2d(out_dim),

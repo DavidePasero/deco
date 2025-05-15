@@ -14,6 +14,7 @@ def trainer(epoch, train_loader, solver, hparams, compute_metrics=False):
     iterator = tqdm(enumerate(train_loader), total=length, leave=False, desc=f'Training Epoch: {epoch}/{total_epochs}')
     for step, batch in iterator:
         losses, output = solver.optimize(batch)
+
     return losses, output
 
 @torch.no_grad()

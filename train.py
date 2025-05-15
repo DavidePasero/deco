@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 import os
+import warnings
 
 from train.trainer_step import TrainStepper
 from train.base_trainer import trainer, evaluator
@@ -9,18 +10,37 @@ from data.mixed_dataset import MixedDataset
 from models.deco import DECO, DINOContact
 from utils.config import parse_args, run_grid_search_experiments
 
+def _create_run_name(hparams):
+    """
+    Generates a unique run name for the experiment based on the model type, encoder, and current timestamp.
+    """
+    # Extract model type and encoder
+    model_type = hparams.TRAINING.MODEL_TYPE
+    encoder = hparams.TRAINING.ENCODER
+
+    run_name = f"{model_type}_{encoder}"
+
+    if "dinov2" in encoder:
+        run_name += f"_train_backbone={hparams.TRAINING.TRAIN_BACKBONE}"
+
+    return run_name
+
 def train(hparams):
+    if hparams.TRAINING.TRAIN_BACKBONE and "dino" in hparams.TRAINING.ENCODER:
+        warnings.warn("Backbone will be trained. Make sure this behavior is wanted!")
     if hparams.TRAINING.MODEL_TYPE == 'deco':
-        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device, hparams.TRAINING.CLASSIFIER_TYPE) # set up DinoContact here
+        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device, hparams.TRAINING.CLASSIFIER_TYPE,
+                          train_backbone=hparams.TRAINING.TRAIN_BACKBONE) # set up DinoContact here
     elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
-        deco_model = DINOContact(device)
+        deco_model = DINOContact(device, train_backbone=hparams.TRAINING.TRAIN_BACKBONE)
     else:
         raise ValueError('Model type not supported')
     
     if isinstance(deco_model, DINOContact):
         hparams.TRAINING.CONTEXT = False
 
-    solver = TrainStepper(deco_model, hparams.TRAINING.CONTEXT, hparams.OPTIMIZER.LR, hparams.TRAINING.LOSS_WEIGHTS, hparams.TRAINING.PAL_LOSS_WEIGHTS, device)
+    solver = TrainStepper(deco_model, hparams.TRAINING.CONTEXT, hparams.OPTIMIZER.LR, hparams.TRAINING.LOSS_WEIGHTS,
+                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, run_name=_create_run_name(hparams))
 
     vb_f1 = 0
     start_ep = 0
@@ -38,7 +58,10 @@ def train(hparams):
         vc_f1 = None
         for val_loader in val_loaders:
             dataset_name = val_loader.dataset.dataset
-            vc_f1_ds = evaluator(val_loader, solver, hparams, epoch, dataset_name, normalize=hparams.DATASET.NORMALIZE_IMAGES)
+            vc_f1_dict, _ = evaluator(val_loader, solver, hparams, epoch, dataset_name, normalize=hparams.DATASET.NORMALIZE_IMAGES,
+                                 return_dict=True)
+            solver._log("epoch-end-eval", vc_f1_dict, epoch)
+            vc_f1_ds = vc_f1_dict["cont_f1"]
             if dataset_name == hparams.VALIDATION.MAIN_DATASET:
                 vc_f1 = vc_f1_ds
         if vc_f1 is None:
@@ -71,6 +94,7 @@ def train(hparams):
 
         if k: continue
         else: break
+
 
 
 if __name__ == '__main__':
