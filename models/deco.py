@@ -22,6 +22,7 @@ class DECO(nn.Module):
         self.context = context
         self.classifier_type = classifier_type
         self.train_backbone = train_backbone
+        self.num_encoders = num_encoders
 
         if self.encoder_type == 'hrnet':
             self.encoder_sem = Encoder(encoder=encoder).to(device)

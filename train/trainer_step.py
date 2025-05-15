@@ -45,7 +45,7 @@ class TrainStepper():
                 weight_decay=0.0001)
         elif deco_model.__class__.__name__ == 'DECO':
             if self.context:
-                if "dinov2" in self.model.encoder_type:
+                if "dinov2" in self.model.encoder_type and self.model.num_encoder == 1:
                     self.optimizer_sem = torch.optim.Adam(
                         params=list(self.model.scene_projector.parameters()) +
                                list(self.model.decoder_sem.parameters()) +
@@ -59,10 +59,12 @@ class TrainStepper():
                         weight_decay=0.0001)
                 else:
                     self.optimizer_sem = torch.optim.Adam(
-                        params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()),
+                        params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()) +
+                               (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                         lr=learning_rate, weight_decay=0.0001)
                     self.optimizer_part = torch.optim.Adam(
-                        params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()),
+                        params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()) +
+                        (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                         lr=learning_rate,
                         weight_decay=0.0001)
 
@@ -71,14 +73,17 @@ class TrainStepper():
                     params=list(self.model.scene_projector.parameters()) + list(
                         self.model.contact_projector.parameters()) + list(
                         self.model.cross_att.parameters()) + list(self.model.classif.parameters()) + (list(
-                        self.model.encoder.parameters()) if self.model.train_backbone else []),
+                        self.model.encoder.parameters()) if self.model.train_backbone else []) +
+                        (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                     lr=learning_rate,
                     weight_decay=0.0001)
             else:
                 self.optimizer_contact = torch.optim.Adam(
                     params=list(self.model.encoder_sem.parameters()) + list(
                         self.model.encoder_part.parameters()) + list(
-                        self.model.cross_att.parameters()) + list(self.model.classif.parameters()), lr=learning_rate,
+                        self.model.cross_att.parameters()) + list(self.model.classif.parameters())
+                    + (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
+                    lr=learning_rate,
                     weight_decay=0.0001)
 
         else:
@@ -137,13 +142,13 @@ class TrainStepper():
             batch_size = has_semantic_contact.shape[0]
             semantic_losses = []
 
-            for i in range(batch_size):
+            for i in range(batch_size): # TODO: Vectorize by flattening it over batch dim
                 # Only process images with semantic contact data
                 if has_semantic_contact[i]:
                     # Extract single image data
                     single_semantic_cont = semantic_cont[i:i + 1]  # Keep batch dimension
                     single_semantic_labels = semantic_contact_labels[i:i + 1]
-                    single_contact_mask = (cont > 0.5)[i:i + 1]
+                    single_contact_mask = (gt_contact_labels_3d > 0)[i:i + 1]
 
                     # Compute loss for this image
                     single_loss = self.semantic_contact_loss(single_semantic_cont,
