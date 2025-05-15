@@ -11,8 +11,8 @@ OPTIMIZER:
   LR: [1e-5]
   NUM_UPDATE_LR: 30
 TRAINING:
-  ENCODER: 'dinov2-giant'
-  NUM_ENCODER: 1
+  ENCODER: 'dinov2-large'
+  NUM_ENCODER: 2
   MODEL_TYPE: "deco"
   CONTEXT: [True]
   NUM_EPOCHS: 100

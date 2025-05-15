@@ -22,6 +22,7 @@ def _create_run_name(hparams):
 
     if "dinov2" in encoder:
         run_name += f"_train_backbone={hparams.TRAINING.TRAIN_BACKBONE}"
+        run_name += f"_num_encoders={hparams.TRAINING.NUM_ENCODER}"
 
     return run_name
 
