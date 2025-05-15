@@ -17,3 +17,5 @@ train/__pycache__/
 utils/__pycache__/
 vis/__pycache__/visualize.cpython-39.pyc
 __pycache__/
+
+runs/
