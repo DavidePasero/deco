@@ -14,6 +14,53 @@ DINOv2NAME_TO_HIDDEN_DIM = {
 }
 
 
+def shared_semantic_classifier(self, att, cont):
+    # Use SharedSemanticClassifier
+    batch_size = att.shape[0]
+    num_vertices = 6890
+    num_classes = self.semantic_classif.num_classes
+
+    # Initialize output tensor
+    semantic_cont = torch.zeros(batch_size, num_classes, num_vertices).to(self.device)
+
+    # Get contact vertices (where cont > threshold)
+    contact_mask = (cont > 0.5)
+
+    if contact_mask.sum() > 0:
+        # Process vertices with contact in parallel using torch.nn.utils.parametrize.cached
+        with torch.nn.utils.parametrize.cached():
+            for b in range(batch_size):
+                # Get vertices with contact for this batch item
+                batch_contacts = contact_mask[b].squeeze()
+
+                if batch_contacts.sum() > 0:
+                    # Get indices of contact vertices
+                    contact_vertices = batch_contacts.nonzero(as_tuple=True)[0]
+
+                    # Create position embeddings for all contact vertices at once
+                    vertex_positions = torch.arange(num_vertices).to(self.device)
+                    vertex_pos_embeddings = self.semantic_classif.pos_embedding(vertex_positions)
+
+                    # Get embeddings only for contact vertices
+                    contact_pos_embeddings = vertex_pos_embeddings[contact_vertices]
+
+                    # Repeat attention features for each contact vertex
+                    repeated_features = att[b].expand(len(contact_vertices), -1, -1)
+
+                    # Concatenate features with position embeddings
+                    combined_features = torch.cat([
+                        repeated_features.squeeze(1),
+                        contact_pos_embeddings
+                    ], dim=1)
+
+                    # Apply classifier to all vertices at once
+                    class_predictions = self.semantic_classif.feature_transform(combined_features)
+
+                    # Place predictions in output tensor
+                    semantic_cont[b, :, contact_vertices] = class_predictions.t()
+
+    return semantic_cont
+
 class DECO(nn.Module):
     def __init__(self, encoder, context, device, classifier_type='shared',
                  train_backbone: bool = False, num_encoders: int = 1):
@@ -142,49 +189,7 @@ class DECO(nn.Module):
             cont = self.classif(att)
 
         if self.classifier_type == 'shared':
-            # Use SharedSemanticClassifier
-            batch_size = att.shape[0]
-            num_vertices = 6890
-            num_classes = self.semantic_classif.num_classes
-            
-            # Initialize output tensor
-            semantic_cont = torch.zeros(batch_size, num_classes, num_vertices).to(self.device)
-            
-            # Get contact vertices (where cont > threshold)
-            contact_mask = (cont > 0.5)
-            
-            if contact_mask.sum() > 0:
-                # Process vertices with contact in parallel using torch.nn.utils.parametrize.cached
-                with torch.nn.utils.parametrize.cached():
-                    for b in range(batch_size):
-                        # Get vertices with contact for this batch item
-                        batch_contacts = contact_mask[b].squeeze()
-                        
-                        if batch_contacts.sum() > 0:
-                            # Get indices of contact vertices
-                            contact_vertices = batch_contacts.nonzero(as_tuple=True)[0]
-                            
-                            # Create position embeddings for all contact vertices at once
-                            vertex_positions = torch.arange(num_vertices).to(self.device)
-                            vertex_pos_embeddings = self.semantic_classif.pos_embedding(vertex_positions)
-                            
-                            # Get embeddings only for contact vertices
-                            contact_pos_embeddings = vertex_pos_embeddings[contact_vertices]
-                            
-                            # Repeat attention features for each contact vertex
-                            repeated_features = att[b].expand(len(contact_vertices), -1, -1)
-                            
-                            # Concatenate features with position embeddings
-                            combined_features = torch.cat([
-                                repeated_features.squeeze(1), 
-                                contact_pos_embeddings
-                            ], dim=1)
-                            
-                            # Apply classifier to all vertices at once
-                            class_predictions = self.semantic_classif.feature_transform(combined_features)
-                            
-                            # Place predictions in output tensor
-                            semantic_cont[b, :, contact_vertices] = class_predictions.t()
+            semantic_cont = shared_semantic_classifier(self, att, cont)
         else:  
             # Semantic contact prediction
             semantic_cont = self.semantic_classif(att)

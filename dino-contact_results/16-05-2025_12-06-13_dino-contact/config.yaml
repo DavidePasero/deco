@@ -19,7 +19,7 @@ TRAINING:
   NUM_EARLY_STOP: 50
   SUMMARY_STEPS: 5
   CHECKPOINT_EPOCHS: 20
-  DATASETS: ['damon']
+  DATASETS: ['rich']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
   BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/dino-contact.pth'
