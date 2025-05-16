@@ -189,9 +189,26 @@ class DECO(nn.Module):
             cont = self.classif(att)
 
         if self.classifier_type == 'shared':
-            semantic_cont = shared_semantic_classifier(self, att, cont)
-        else:  
-            # Semantic contact prediction
+            # ------------------------------------------------------------------
+            # Vectorised semantic‑contact prediction without per‑sample loops.
+            #
+            #   att   : [B, 1, F]   (global image features)
+            #   cont  : [B, 1, 6 890]  (contact logits – not probabilities!)
+            #
+            # Strategy:
+            #   • Run the shared classifier on *all* vertices in parallel
+            #     → logits_all : [B, C, 6890]
+            #   • Convert contact logits to a boolean mask via logit>0
+            #     (equivalent to sigmoid(logit) > 0.5).
+            #   • Zero‑out logits for non‑contact vertices
+            # ------------------------------------------------------------------
+            feats = att.squeeze(1)                       # [B, F]
+            logits_all = self.semantic_classif(feats)    # [B, C, 6890]
+
+            contact_mask = (cont.squeeze(1) > 0.5)         # [B, 6890]  (logit>0 ≡ p>0.5)
+            semantic_cont = logits_all * contact_mask.unsqueeze(1)  # broadcast mask
+        else:
+            # Semantic contact prediction with the separate (non‑shared) classifier
             semantic_cont = self.semantic_classif(att)
 
         if self.context: 
@@ -261,7 +278,7 @@ class DINOContact(nn.Module):
         self.encoder = Encoder(encoder=encoder_name)
         hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[encoder_name]
         self.classifier = Classifier(hidden_dim).to(device)
-        self.semantic_classif = SemanticClassifier(hidden_dim).to(device) if classifier_type is "shared" else None
+        self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device) if classifier_type == "shared" else None
         self.train_backbone = train_backbone
 
     def forward(self, x):
@@ -272,9 +289,12 @@ class DINOContact(nn.Module):
                 features = self.encoder(x)
 
         cont = self.classifier(features)
-
+        
         if self.semantic_classif is not None:
-            sem_cont = self.semantic_classif(features)
-            return cont, sem_cont
+            feats = features.squeeze(1)                  # [B, F]
+            logits_all = self.semantic_classif(feats)    # [B, C, 6890]
 
+            contact_mask = (cont.squeeze(1) > 0.5)         # [B, 6890]
+            semantic_cont = logits_all * contact_mask.unsqueeze(1)  # broadcast mask
+            return cont, semantic_cont
         return cont

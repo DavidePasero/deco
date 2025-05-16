@@ -198,40 +198,64 @@ class SemanticClassifier(nn.Module):
         
         return vertex_preds
 
-class SharedSemanticClassifier (nn.Module):
-    def __init__(self, features_dim, num_classes=70):
-        super(SharedSemanticClassifier, self).__init__()
-        
-        self.num_classes = num_classes
-        self.pos_embedding = nn.Embedding(6890, features_dim)
+class SharedSemanticClassifier(nn.Module):
+    """
+    Shared classifier that predicts the contact class for every mesh vertex.
+    The same (image‑conditioned) MLP is applied to all 6 890 vertices in
+    parallel.  Global image features are broadcast across vertices and
+    concatenated with a learnable positional embedding for each vertex.
+    """
+    def __init__(self, features_dim: int, num_classes: int = 70, num_vertices: int = 6890):
+        super().__init__()
 
-        # First transform features to higher dimension
-        self.feature_transform = nn.Sequential(
+        self.num_vertices = num_vertices
+        self.num_classes = num_classes
+
+        # Per‑vertex positional embedding
+        self.pos_embedding = nn.Embedding(num_vertices, features_dim)
+
+        # Two‑layer MLP that is shared by all vertices
+        self.mlp = nn.Sequential(
             nn.Linear(features_dim * 2, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, num_classes)
+            nn.ReLU(inplace=True),
+            nn.Linear(1024, num_classes)           # → logits for each contact class
         )
-                
-    def forward(self, x):
+
+    def forward(self, features, vertex_indices=None):
         """
         Args:
-            x: Input features [B, in_dim]
+            features (Tensor | Dict): If Tensor, shape [B, F] with the same
+                cross-attention image features for every vertex.  If Dict, it
+                must contain:
+                    • "features": Tensor [B, F]
+                    • "vertex_pos": LongTensor [B, V] with vertex indices.
+            vertex_indices (LongTensor, optional): Explicit vertex indices
+                [B, V].  If omitted and `features` is a Dict, the key
+                "vertex_pos" is used.  If still None, all vertices
+                (0 … 6889) are assumed.
         Returns:
-            Class logits [B, num_classes, num_vertices]
+            logits: [B, num_classes, V]
         """
-        vertex_pos = self.pos_embedding(x["vertex_pos"].long())
-        features = x["features"]
-        batch_size = x.shape[0]
+        # Support both the old dict interface and the new positional argument
+        if isinstance(features, dict):
+            vertex_indices = features["vertex_pos"]
+            features = features["features"]
 
-        features = torch.cat([features, vertex_pos], dim=1)
-        
-        # Transform features
-        vertex_preds = self.feature_transform(x)
-                
-        # Reshape to [B, num_vertices, num_classes]
-        vertex_preds = vertex_preds.view(batch_size, 1, self.num_classes)
-        
-        # Transpose to [B, num_classes, num_vertices] to match expected output format
-        vertex_preds = vertex_preds.transpose(1, 2)
-        
-        return vertex_preds
+        B, F = features.shape
+        if vertex_indices is None:
+            # Use the full mesh if no indices are provided
+            vertex_indices = torch.arange(self.num_vertices,
+                                          device=features.device).unsqueeze(0).expand(B, -1)  # [B, V]
+
+        # [B, V, F] positional embeddings
+        pos_emb = self.pos_embedding(vertex_indices)
+
+        # Broadcast global image features to every vertex: [B, 1, F] → [B, V, F]
+        global_feat = features.unsqueeze(1).expand(-1, pos_emb.size(1), -1)
+
+        # Concatenate and run the shared MLP
+        x = torch.cat([global_feat, pos_emb], dim=-1)             # [B, V, 2F]
+        logits = self.mlp(x)                                      # [B, V, C]
+
+        # Rearrange to [B, C, V] expected by downstream code
+        return logits.permute(0, 2, 1).contiguous()
