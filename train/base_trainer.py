@@ -52,7 +52,9 @@ def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', norm
         curr_batch_size = batch['img'].shape[0]
         losses, output, time_taken = solver.evaluate(batch)
 
-        val_epoch_cont_loss[step * batch_size:step * batch_size + curr_batch_size] = losses['cont_loss'].cpu().numpy()
+        if isinstance(losses["cont_loss"], torch.Tensor):
+            losses["cont_loss"] = losses["cont_loss"].cpu().numpy()
+        val_epoch_cont_loss[step * batch_size:step * batch_size + curr_batch_size] = losses['cont_loss']
 
         # compute metrics
         contact_labels_3d = output['contact_labels_3d_gt']

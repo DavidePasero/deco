@@ -3,7 +3,7 @@ PROJECT_NAME: 'DECO_demo_training'
 OUTPUT_DIR: 'dino-contact_results'
 CONDOR_DIR: ''
 DATASET:
-  BATCH_SIZE: 32
+  BATCH_SIZE: 20
   NUM_WORKERS: 8
   NORMALIZE_IMAGES: [True]
 OPTIMIZER:

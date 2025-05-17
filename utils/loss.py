@@ -33,7 +33,7 @@ class MultiClassContactLoss(nn.Module):
         self.contact_weight = contact_weight  # Weight for binary contact errors
         self.class_weight = class_weight      # Weight for object class errors
         self.dist_weight = dist_weight        # Weight for distance-based errors
-        self.bce = nn.BCELoss(reduction='none')
+        self.bce = nn.BCEWithLogitsLoss(reduction="none")
         
     def forward(self, pred, target):
         """
@@ -43,7 +43,7 @@ class MultiClassContactLoss(nn.Module):
             target: Ground truth contact labels [B, C, V]
         
         Returns:
-            Total loss combining contact detection and class accuracy
+            Total loss combining contact detection and class accuracy, returns scalar
         """
         batch_size, num_classes, num_vertices = pred.shape
         
@@ -76,12 +76,7 @@ class MultiClassContactLoss(nn.Module):
             self.dist_weight * dist_loss
         )
         
-        return total_loss, {
-            'binary_loss': binary_loss.item(),
-            'class_loss': class_loss.item(),
-            'dist_loss': dist_loss.item(),
-            'total_loss': total_loss.item()
-        }
+        return total_loss, binary_loss, class_loss, dist_loss
 
 
 class class_loss_function(nn.Module):

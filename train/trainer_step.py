@@ -1,4 +1,4 @@
-from utils.loss import sem_loss_function, class_loss_function, pixel_anchoring_function, SemanticContactLoss
+from utils.loss import sem_loss_function, class_loss_function, pixel_anchoring_function, SemanticContactLoss, MultiClassContactLoss
 import torch
 import os
 import time
@@ -23,7 +23,7 @@ class TrainStepper():
         self.lr = learning_rate
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
-        self.semantic_contact_loss = SemanticContactLoss().to(device)
+        self.semantic_contact_loss = MultiClassContactLoss().to(device)
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -129,36 +129,11 @@ class TrainStepper():
             loss_sem = self.sem_loss(sem_mask_gt, sem_mask_pred)
             loss_part = self.sem_loss(part_mask_gt, part_mask_pred)
         valid_contact_3d = has_contact_3d
-        loss_cont = self.class_loss(gt_contact_labels_3d, cont, valid_contact_3d)
         valid_polygon_contact_2d = has_polygon_contact_2d
 
-        # Calculate semantic contact loss
-        # Initialize semantic loss as zero tensor
-        loss_semantic = torch.tensor(0.0).to(self.device)
+        # CONTACT LOSS CALCULATION
+        total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(semantic_cont, semantic_contact_labels)
 
-        # Check if any image in the batch has semantic contact data
-        if has_semantic_contact.any():
-            # Process each image in the batch individually
-            batch_size = has_semantic_contact.shape[0]
-            semantic_losses = []
-
-            for i in range(batch_size): # TODO: Vectorize by flattening it over batch dim
-                # Only process images with semantic contact data
-                if has_semantic_contact[i]:
-                    # Extract single image data
-                    single_semantic_cont = semantic_cont[i:i + 1]  # Keep batch dimension
-                    single_semantic_labels = semantic_contact_labels[i:i + 1]
-                    single_contact_mask = (gt_contact_labels_3d > 0)[i:i + 1]
-
-                    # Compute loss for this image
-                    single_loss = self.semantic_contact_loss(single_semantic_cont,
-                                                             single_semantic_labels,
-                                                             single_contact_mask)
-                    semantic_losses.append(single_loss)
-
-            # Average the losses from images that had semantic contact data
-            if semantic_losses:
-                loss_semantic = torch.stack(semantic_losses).mean()
 
         if self.pal_loss_weight > 0 and (is_smplx == 0).sum() > 0:
             smpl_body_params = {'pose': pose[is_smplx == 0], 'betas': betas[is_smplx == 0],
@@ -181,15 +156,9 @@ class TrainStepper():
             contact_2d_pred_rgb = torch.zeros_like(polygon_contact_2d)
         
         if self.context:
-            losses["loss_sem"] = loss_sem.item()
-            losses["loss_part"] = loss_part.item()
-            loss = loss_sem + loss_part + self.loss_weight * loss_cont + self.semantic_loss_weight * loss_semantic + self.pal_loss_weight * loss_pix_anchoring
+            loss = loss_sem + loss_part + self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
         else:
-            loss = self.loss_weight * loss_cont + self.semantic_loss_weight * loss_semantic + self.pal_loss_weight * loss_pix_anchoring
-        
-        losses["loss_cont"] = loss_cont.item()
-        losses["loss_semantic"] = loss_semantic.item()
-        losses["loss_pix_anchoring"] = loss_pix_anchoring.item()
+            loss = self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
         
         self._log("train", losses, self.global_step)
         self.global_step += 1
@@ -207,17 +176,19 @@ class TrainStepper():
         self.optimizer_contact.step()
 
         if self.context:
-            losses = {'sem_loss': loss_sem,
-                      'part_loss': loss_part,
-                      'cont_loss': loss_cont,
-                      'semantic_loss': loss_semantic,
-                      'pal_loss': loss_pix_anchoring,
-                      'total_loss': loss}
+            losses = {  'sem_loss': loss_sem,
+                        'part_loss': loss_part,
+                        'cont_loss': loss_cont,
+                        'semantic_loss': loss_semantic,
+                        'dist_loss': loss_dist,
+                        'pal_loss': loss_pix_anchoring,
+                        'total_loss': loss}
         else:
-            losses = {'cont_loss': loss_cont,
-                      'semantic_loss': loss_semantic,
-                      'pal_loss': loss_pix_anchoring,
-                      'total_loss': loss}
+            losses = {  'cont_loss': loss_cont,
+                        'semantic_loss': loss_semantic,
+                        'dist_loss': loss_dist,
+                        'pal_loss': loss_pix_anchoring,
+                        'total_loss': loss}
 
         if self.context:
             output = {
@@ -294,33 +265,8 @@ class TrainStepper():
         loss_cont = self.class_loss(gt_contact_labels_3d, cont, valid_contact_3d)
         valid_polygon_contact_2d = has_polygon_contact_2d
 
-        # Calculate semantic contact loss
-        # Initialize semantic loss as zero tensor
-        loss_semantic = torch.tensor(0.0).to(self.device)
-
-        # Check if any image in the batch has semantic contact data
-        if has_semantic_contact.any():
-            # Process each image in the batch individually
-            batch_size = has_semantic_contact.shape[0]
-            semantic_losses = []
-
-            for i in range(batch_size):
-                # Only process images with semantic contact data
-                if has_semantic_contact[i]:
-                    # Extract single image data
-                    single_semantic_cont = semantic_cont[i:i + 1]  # Keep batch dimension
-                    single_semantic_labels = semantic_contact_labels[i:i + 1]
-                    single_contact_mask = (cont > 0.5)[i:i + 1]
-
-                    # Compute loss for this image
-                    single_loss = self.semantic_contact_loss(single_semantic_cont,
-                                                             single_semantic_labels,
-                                                             single_contact_mask)
-                    semantic_losses.append(single_loss)
-
-            # Average the losses from images that had semantic contact data
-            if semantic_losses:
-                loss_semantic = torch.stack(semantic_losses).mean()
+        # CONTACT LOSS CALCULATION
+        total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(semantic_cont, semantic_contact_labels)
 
         if self.pal_loss_weight > 0 and (
                 is_smplx == 0).sum() > 0:  # PAL loss only on 2D contacts in HOT which only has SMPL
@@ -344,22 +290,24 @@ class TrainStepper():
             contact_2d_pred_rgb = torch.zeros_like(polygon_contact_2d)
 
         if self.context:
-            loss = loss_sem + loss_part + self.loss_weight * loss_cont + self.semantic_loss_weight * loss_semantic + self.pal_loss_weight * loss_pix_anchoring
+            loss = loss_sem + loss_part + self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
         else:
-            loss = self.loss_weight * loss_cont + self.semantic_loss_weight * loss_semantic + self.pal_loss_weight * loss_pix_anchoring
+            loss = self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
 
         if self.context:
-            losses = {'sem_loss': loss_sem,
-                      'part_loss': loss_part,
-                      'cont_loss': loss_cont,
-                      'semantic_loss': loss_semantic,
-                      'pal_loss': loss_pix_anchoring,
-                      'total_loss': loss}
+            losses = {  'sem_loss': loss_sem,
+                        'part_loss': loss_part,
+                        'cont_loss': loss_cont,
+                        'semantic_loss': loss_semantic,
+                        'dist_loss': loss_dist,
+                        'pal_loss': loss_pix_anchoring,
+                        'total_loss': loss}
         else:
-            losses = {'cont_loss': loss_cont,
-                      'semantic_loss': loss_semantic,
-                      'pal_loss': loss_pix_anchoring,
-                      'total_loss': loss}
+            losses = {  'cont_loss': loss_cont,
+                        'semantic_loss': loss_semantic,
+                        'dist_loss': loss_dist,
+                        'pal_loss': loss_pix_anchoring,
+                        'total_loss': loss}
         self._log("eval", losses, self.global_step)
         if self.context:
             output = {
