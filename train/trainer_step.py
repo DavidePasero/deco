@@ -160,6 +160,15 @@ class TrainStepper():
         else:
             loss = self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
         
+        losses = {
+            'sem_loss': loss_sem.item(),
+            'part_loss': loss_part.item(),
+            'cont_loss': loss_cont.item(),
+            'semantic_loss': loss_semantic.item(),
+            'dist_loss': loss_dist.item(),
+            'pal_loss': loss_pix_anchoring.item(),
+            'total_loss': loss.item()
+        }
         self._log("train", losses, self.global_step)
         self.global_step += 1
         
