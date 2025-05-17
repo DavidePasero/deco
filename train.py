@@ -63,7 +63,6 @@ def train(hparams):
                                  return_dict=True)
             solver._log("epoch-end-eval", vc_f1_dict, epoch)
             vc_f1_ds = vc_f1_dict["cont_f1"]
-            vc_f1_ds_sem = vc_f1_dict["semantic_f1"]
             if dataset_name == hparams.VALIDATION.MAIN_DATASET:
                 vc_f1 = vc_f1_ds
         if vc_f1 is None:

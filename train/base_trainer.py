@@ -30,9 +30,7 @@ def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', norm
     val_epoch_cont_f1 = np.zeros(dataset_size)
     val_epoch_fp_geo_err = np.zeros(dataset_size)
     val_epoch_fn_geo_err = np.zeros(dataset_size)
-    val_epoch_semantic_pre = np.zeros(dataset_size)
-    val_epoch_semantic_rec = np.zeros(dataset_size)
-    val_epoch_semantic_f1 = np.zeros(dataset_size)
+    val_epoch_semantic_acc = np.zeros(dataset_size)
 
     if hparams.TRAINING.CONTEXT:
         val_epoch_sem_iou = np.zeros(dataset_size)
@@ -70,7 +68,13 @@ def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', norm
             part_seg_pred = output['part_mask_pred']
 
         cont_pre, cont_rec, cont_f1 = precision_recall_f1score(contact_labels_3d, contact_labels_3d_pred)
-        semantic_pre, semantic_rec, semantic_f1 = precision_recall_f1score(output["semantic_contact_gt"], output["semantic_contact_pred"])
+        gt_sem_classes = torch.argmax(output["semantic_contact_gt"], -2)
+        pred_sem_classes = torch.argmax(output["semantic_contact_pred"], -2)
+        gt_sem_mask = (gt_sem_classes > 0 )
+        acc = gt_sem_classes == pred_sem_classes
+        acc = (acc * gt_sem_mask).sum() / gt_sem_mask.sum()
+
+        #semantic_pre, semantic_rec, semantic_f1 = precision_recall_f1score(output["semantic_contact_gt"], output["semantic_contact_pred"])
         fp_geo_err, fn_geo_err = det_error_metric(contact_labels_3d_pred, contact_labels_3d)
         if hparams.TRAINING.CONTEXT:
             sem_iou = metric(sem_mask_gt, sem_seg_pred)
@@ -81,9 +85,7 @@ def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', norm
         val_epoch_cont_f1[step * batch_size:step * batch_size + curr_batch_size] = cont_f1.cpu().numpy()
         val_epoch_fp_geo_err[step * batch_size:step * batch_size + curr_batch_size] = fp_geo_err.cpu().numpy()
         val_epoch_fn_geo_err[step * batch_size:step * batch_size + curr_batch_size] = fn_geo_err.cpu().numpy()
-        val_epoch_semantic_pre[step * batch_size:step * batch_size + curr_batch_size] = semantic_pre.cpu().numpy()
-        val_epoch_semantic_rec[step * batch_size:step * batch_size + curr_batch_size] = semantic_rec.cpu().numpy()
-        val_epoch_semantic_f1[step * batch_size:step * batch_size + curr_batch_size] = semantic_f1.cpu().numpy()
+        val_epoch_semantic_acc[step * batch_size:step * batch_size + curr_batch_size] = acc.cpu().numpy()
 
 
         if hparams.TRAINING.CONTEXT:
@@ -103,9 +105,7 @@ def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', norm
     eval_dict['cont_f1'] = np.sum(val_epoch_cont_f1) / dataset_size
     eval_dict['fp_geo_err'] = np.sum(val_epoch_fp_geo_err) / dataset_size
     eval_dict['fn_geo_err'] = np.sum(val_epoch_fn_geo_err) / dataset_size
-    eval_dict["semantic_precision"] = np.sum(val_epoch_semantic_pre) / dataset_size
-    eval_dict["semantic_f1"] = np.sum(val_epoch_semantic_f1) / dataset_size
-    eval_dict["semantic_recall"] = np.sum(val_epoch_semantic_rec) / dataset_size
+    eval_dict["semantic_accuracy"] = np.sum(acc) / dataset_size
 
     if hparams.TRAINING.CONTEXT:
         eval_dict['sem_iou'] = np.sum(val_epoch_sem_iou) / dataset_size
