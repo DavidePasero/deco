@@ -156,18 +156,23 @@ class TrainStepper():
             contact_2d_pred_rgb = torch.zeros_like(polygon_contact_2d)
         
         if self.context:
+            loss_sem_dict = {
+                'sem_loss': loss_sem.item(),
+                'part_loss': loss_part.item(),
+            }
             loss = loss_sem + loss_part + self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
         else:
+            loss_sem_dict = {}
             loss = self.loss_weight * total_cont_loss + self.pal_loss_weight * loss_pix_anchoring
         
         losses = {
-            'sem_loss': loss_sem.item(),
-            'part_loss': loss_part.item(),
+            **{
             'cont_loss': loss_cont.item(),
             'semantic_loss': loss_semantic.item(),
             'dist_loss': loss_dist.item(),
             'pal_loss': loss_pix_anchoring.item(),
-            'total_loss': loss.item()
+            'total_loss': loss.item()},
+            **loss_sem_dict
         }
         self._log("train", losses, self.global_step)
         self.global_step += 1
@@ -212,7 +217,7 @@ class TrainStepper():
                 'has_contact_3d': has_contact_3d,
                 'contact_labels_3d_gt': gt_contact_labels_3d,
                 'contact_labels_3d_pred': cont,
-                'semantic_contact_pred': semantic_cont,
+                'semantic_contact_pred': semantic_logits,
                 'semantic_contact_gt': semantic_contact_labels}
         else:
             output = {
@@ -223,7 +228,7 @@ class TrainStepper():
                 'has_contact_3d': has_contact_3d,
                 'contact_labels_3d_gt': gt_contact_labels_3d,
                 'contact_labels_3d_pred': cont,
-                'semantic_contact_pred': semantic_cont,
+                'semantic_contact_pred': semantic_logits,
                 'semantic_contact_gt': semantic_contact_labels}
 
         return losses, output
@@ -331,7 +336,7 @@ class TrainStepper():
                 'has_contact_3d': has_contact_3d,
                 'contact_labels_3d_gt': gt_contact_labels_3d,
                 'contact_labels_3d_pred': cont,
-                'semantic_contact_pred': semantic_cont,
+                'semantic_contact_pred': semantic_logits,
                 'semantic_contact_gt': semantic_contact_labels}
         else:
             output = {
@@ -342,7 +347,7 @@ class TrainStepper():
                 'has_contact_3d': has_contact_3d,
                 'contact_labels_3d_gt': gt_contact_labels_3d,
                 'contact_labels_3d_pred': cont,
-                'semantic_contact_pred': semantic_cont,
+                'semantic_contact_pred': semantic_logits,
                 'semantic_contact_gt': semantic_contact_labels}
 
         return losses, output, time_taken

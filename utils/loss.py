@@ -46,7 +46,7 @@ class MultiClassContactLoss(nn.Module):
             pos_weight=torch.tensor([pos_weight]) if pos_weight is not None else None
         )
         # per-class loss (one‐hot targets) – weight can be tuned per class later
-        self.ce_class = nn.CrossEntropyLoss(reduction="mean")
+        self.ce_class = nn.CrossEntropyLoss(reduction="none")
 
     # -------------------------------------------------------------------- #
     def forward(self, cont_pred: torch.Tensor, vertex_obj_pred: torch.Tensor, target: torch.Tensor):
@@ -61,8 +61,6 @@ class MultiClassContactLoss(nn.Module):
           total_loss  : scalar
           stats       : dict of sub-losses (floats)
         """
-        B, C, V = pred.shape
-        device  = pred.device
 
         # ---------------------------------------------------------------- #
         # 1) Binary "any-contact" head  (soft OR over classes)
@@ -78,14 +76,12 @@ class MultiClassContactLoss(nn.Module):
         contact_mask = target_any_contact.bool()                  # [B, V]
 
         if contact_mask.any():
-            # Expand mask to [B, C, V] for broadcasting
-            mask = contact_mask.unsqueeze(1)                      # [B,1,V]
-
-            per_class_loss = self.ce_class(pred, target)         # [B,C,V]
+            # Expand mask to [B, C, V] for broadcasting                    # [B,1,V]
+            per_class_loss = self.ce_class(vertex_obj_pred, target)         # [B,C,V]
             # keep only vertices where GT has contact
-            semantic_loss = (per_class_loss * mask).sum() / mask.sum()
+            semantic_loss = (per_class_loss * contact_mask).sum() / contact_mask.sum()
         else:
-            semantic_loss = pred.new_tensor(0.0)
+            semantic_loss = vertex_obj_pred.new_tensor(0.0)
 
         # ---------------------------------------------------------------- #
         # 3) Geodesic distance penalty (optional)
@@ -97,7 +93,7 @@ class MultiClassContactLoss(nn.Module):
             )
             dist_loss = (fp_dist.mean() + fn_dist.mean()) / 2.0
         else:
-            dist_loss = cont.new_tensor(0.0)
+            dist_loss = cont_pred.new_tensor(0.0)
 
         # ---------------------------------------------------------------- #
         total_loss = (
