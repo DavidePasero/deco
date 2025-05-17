@@ -262,15 +262,28 @@ class DECO(nn.Module):
 
         return att, cont
 
-
 class DINOContact(nn.Module):
     def __init__(self, device: str = "cuda", encoder_name: str = "dinov2-large",
                  classifier_type: str = "shared", train_backbone: bool = False,
+                 train_last: int = -1,
                  *args, **kwargs):
         super(DINOContact, self).__init__()
         self.device = device
+        self.num_layers_per_model = {
+            "dinov2-giant" : 40,
+            "dinov2-large": 24
+        }
+        self.num_enc_layers = self.num_layers_per_model[encoder_name]
         self.encoder = Encoder(encoder=encoder_name)
         hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[encoder_name]
+        layers_to_train = [str(x) for x in range(self.num_enc_layers - train_last, self.num_enc_layers)]
+        """
+        for name, mod in self.encoder.named_parameters(): #VODOO
+            if set(layers_to_train).intersection(set(name.split("."))):
+                mod.requires_grad = True
+            else:
+                mod.requires_grad = False
+        """
         self.classifier = Classifier(hidden_dim).to(device)
         self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device) if classifier_type == "shared" else None
         self.train_backbone = train_backbone
