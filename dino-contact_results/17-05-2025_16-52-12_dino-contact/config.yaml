@@ -1,6 +1,6 @@
-EXP_NAME: 'dino-contact-for-real(other_one_is_baseline)'
+EXP_NAME: 'dino-contact'
 PROJECT_NAME: 'DECO_demo_training'
-OUTPUT_DIR: 'dino-contact-for-real_results'
+OUTPUT_DIR: 'dino-contact_results'
 CONDOR_DIR: ''
 DATASET:
   BATCH_SIZE: 32

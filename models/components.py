@@ -201,7 +201,7 @@ class SemanticClassifier(nn.Module):
 class SharedSemanticClassifier(nn.Module):
     """
     Shared classifier that predicts the contact class for every mesh vertex.
-    The same (image‑conditioned) MLP is applied to all 6 890 vertices in
+    The same (image-conditioned) MLP is applied to all 6890 vertices in
     parallel.  Global image features are broadcast across vertices and
     concatenated with a learnable positional embedding for each vertex.
     """
@@ -227,8 +227,8 @@ class SharedSemanticClassifier(nn.Module):
             features (Tensor | Dict): If Tensor, shape [B, F] with the same
                 cross-attention image features for every vertex.  If Dict, it
                 must contain:
-                    • "features": Tensor [B, F]
-                    • "vertex_pos": LongTensor [B, V] with vertex indices.
+                    - "features": Tensor [B, F]
+                    - "vertex_pos": LongTensor [B, V] with vertex indices.
             vertex_indices (LongTensor, optional): Explicit vertex indices
                 [B, V].  If omitted and `features` is a Dict, the key
                 "vertex_pos" is used.  If still None, all vertices

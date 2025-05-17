@@ -368,7 +368,7 @@ class TrainStepper():
         else:
             torch.save({
                 'epoch': ep,
-                'deco' if self.model.__class__.__name__ == 'DECO' else "dinocontact": self.model.state_dict(),
+                'deco' if self.model.__class__.__name__ == 'DECO' else "dinoContact": self.model.state_dict(),
                 'f1': f1,
                 'sem_optim': self.optimizer_sem.state_dict() if hasattr(self, "optimizer_sem") else None,
                 'part_optim': self.optimizer_part.state_dict() if hasattr(self, "part_optim") else None,

@@ -48,7 +48,14 @@ def initiate_model(args):
 
     logger.info(f'Loading weights from {args.model_path}')
     checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
-    deco_model.load_state_dict(checkpoint['deco'], strict=True)
+
+    #### DEBUG
+    if args.model_type == 'dinoContact':
+        state_dict_model = 'dinocontact'
+    else:
+        state_dict_model = 'deco'
+
+    deco_model.load_state_dict(checkpoint[state_dict_model], strict=False)
 
     deco_model.eval()
 
@@ -171,15 +178,36 @@ def main(args):
         img = img[np.newaxis,:,:,:]
         img = torch.tensor(img, dtype = torch.float32).to(device)
 
-        cont, _, _, semantic_cont = deco_model(img)
-        cont = cont.detach().cpu().numpy().squeeze()
-        semantic_cont = semantic_cont.detach().cpu().numpy()  # [batch, num_classes, num_vertices]
+        if args.model_type == 'dinoContact':
+            cont, semantic_logits = deco_model(img)
+        else:
+            cont, semantic_logits = deco_model(img)
+        cont = cont.detach().cpu()                 # keep as Tensor
+        semantic_logits = semantic_logits.detach().cpu()          # keep as Tensor
         
+        cont_np = cont.numpy()[0]                  # [V] for later Python loops
+        
+        # cont            : [B, V]        – probabilities in [0,1]
+        # semantic_logits : [B, C, V]     – raw logits (no softmax)
+
+        # 1. Threshold the binary contact map
+        contact_mask = (cont >= 0.5)                           # [B, V]   bool
+
+        # 2. Find the winning object class per vertex
+        #    (still shape [B, 1, V] so we can scatter)
+        winning_idx = torch.argmax(semantic_logits, dim=1, keepdim=True)   # [B, 1, V]  long
+
+        # 3. Build the output tensor
+        semantic_cont = torch.zeros_like(semantic_logits, dtype=cont.dtype)  # [B, C, V]
+
+        #    Put a 1 at the winning index for every vertex
+        semantic_cont.scatter_(1, winning_idx, 1.0)             # ones at winners, zeros elsewhere
+
+        # 4. Zero–out vertices predicted as “no contact”
+        semantic_cont *= contact_mask.unsqueeze(1).float()      # keep only vertices with cont ≥ 0.5
+
         # Get contact vertices
-        cont_smpl = []
-        for indx, i in enumerate(cont):
-            if i >= 0.5:
-                cont_smpl.append(indx)
+        cont_smpl = np.where(cont_np >= 0.5)[0].tolist()
         
         img = img.detach().cpu().numpy()		
         img = np.transpose(img[0], (1, 2, 0))		
