@@ -22,61 +22,91 @@ class sem_loss_function(nn.Module):
     
 class MultiClassContactLoss(nn.Module):
     """
-    Hierarchical loss function for multi-class contact prediction
-    
-    Applies different penalties for:
-    1. Contact/no-contact errors (primary error - high penalty)
-    2. Object class errors (secondary error - lower penalty)
+    Loss =   w_contact · BCE(any-contact)
+           + w_class   · BCE(per-class | contact)
+           + w_dist    · distance penalty  (optional)
     """
-    def __init__(self, contact_weight=1.0, class_weight=0.5, dist_weight=0.2):
-        super(MultiClassContactLoss, self).__init__()
-        self.contact_weight = contact_weight  # Weight for binary contact errors
-        self.class_weight = class_weight      # Weight for object class errors
-        self.dist_weight = dist_weight        # Weight for distance-based errors
-        self.bce = nn.BCEWithLogitsLoss(reduction="none")
-        
-    def forward(self, pred, target):
-        """
-        Args:
-            pred: Predicted contact probabilities [B, C, V] 
-                  (batch_size, num_classes, num_vertices)
-            target: Ground truth contact labels [B, C, V]
-        
-        Returns:
-            Total loss combining contact detection and class accuracy, returns scalar
-        """
-        batch_size, num_classes, num_vertices = pred.shape
-        
-        # 1. Binary Contact Loss - Any contact vs. no contact
-        # Collapse class dimension to get binary contact prediction
-        pred_any_contact = torch.max(pred, dim=1)[0]  # [B, V]
-        target_any_contact = torch.max(target, dim=1)[0]  # [B, V]
-        
-        binary_loss = self.bce(pred_any_contact, target_any_contact).mean()
-        
-        # 2. Class-specific Contact Loss - Right object class
-        # Only apply to vertices that have contact
-        contact_mask = (target_any_contact > 0).unsqueeze(1).expand(-1, num_classes, -1)  # [B, C, V]
-        
-        if contact_mask.sum() > 0:
-            class_loss = self.bce(pred, target)
-            class_loss = (class_loss * contact_mask).sum() / (contact_mask.sum() + 1e-8)
-        else:
-            class_loss = torch.tensor(0.0).to(pred.device)
-        
-        # 3. Distance-based Loss - Penalize based on geodesic distance
-        # Calculate false positive and false negative distances
-        fp_dist, fn_dist = det_error_metric(pred_any_contact, target_any_contact)
-        dist_loss = (fp_dist.mean() + fn_dist.mean()) / 2.0
-        
-        # Combine losses with weights
-        total_loss = (
-            self.contact_weight * binary_loss + 
-            self.class_weight * class_loss + 
-            self.dist_weight * dist_loss
+    def __init__(
+        self,
+        num_classes: int = 70,
+        contact_weight: float = 1.0,
+        class_weight: float   = 0.5,
+        dist_weight: float    = 0.01,           # much smaller now
+        pos_weight: float     = None            # computed from data if not provided
+    ):
+        super().__init__()
+        self.num_classes   = num_classes
+        self.contact_w     = contact_weight
+        self.class_w       = class_weight
+        self.dist_w        = dist_weight
+
+        # You can pass a tensor of size [1] or compute externally.
+        self.bce_contact = nn.BCEWithLogitsLoss(
+            reduction="mean",
+            pos_weight=torch.tensor([pos_weight]) if pos_weight is not None else None
         )
-        
-        return total_loss, binary_loss, class_loss, dist_loss
+        # per-class loss (one‐hot targets) – weight can be tuned per class later
+        self.ce_class = nn.CrossEntropyLoss(reduction="mean")
+
+    # -------------------------------------------------------------------- #
+    def forward(self, cont_pred: torch.Tensor, vertex_obj_pred: torch.Tensor, target: torch.Tensor):
+        """
+        Args
+        ----
+          pred   : [B, C, V]  raw logits  (NOT probabilities!)
+          target : [B, C, V]  {0,1} one-hot GT  (at most one 1 per vertex)
+
+        Returns
+        -------
+          total_loss  : scalar
+          stats       : dict of sub-losses (floats)
+        """
+        B, C, V = pred.shape
+        device  = pred.device
+
+        # ---------------------------------------------------------------- #
+        # 1) Binary "any-contact" head  (soft OR over classes)
+        # ---------------------------------------------------------------- #
+        # logit_any = log( Σ_i exp(logit_i) )   (soft maximum)
+        target_any_contact = target.any(dim=1).float()            # [B, V] in {0,1}
+
+        binary_loss = self.bce_contact(cont_pred, target_any_contact)
+
+        # ---------------------------------------------------------------- #
+        # 2) Cross entropy loss – only on vertices that truly have contact
+        # ---------------------------------------------------------------- #
+        contact_mask = target_any_contact.bool()                  # [B, V]
+
+        if contact_mask.any():
+            # Expand mask to [B, C, V] for broadcasting
+            mask = contact_mask.unsqueeze(1)                      # [B,1,V]
+
+            per_class_loss = self.ce_class(pred, target)         # [B,C,V]
+            # keep only vertices where GT has contact
+            semantic_loss = (per_class_loss * mask).sum() / mask.sum()
+        else:
+            semantic_loss = pred.new_tensor(0.0)
+
+        # ---------------------------------------------------------------- #
+        # 3) Geodesic distance penalty (optional)
+        # ---------------------------------------------------------------- #
+        if self.dist_w > 0:
+            fp_dist, fn_dist = det_error_metric(      # returns [B,*] tensors
+                cont_pred.detach(),              # detach so only BCE grads flow
+                target_any_contact
+            )
+            dist_loss = (fp_dist.mean() + fn_dist.mean()) / 2.0
+        else:
+            dist_loss = cont.new_tensor(0.0)
+
+        # ---------------------------------------------------------------- #
+        total_loss = (
+            self.contact_w * binary_loss +
+            self.class_w   * semantic_loss   +
+            self.dist_w    * dist_loss
+        )
+
+        return total_loss, binary_loss, semantic_loss, dist_loss
 
 
 class class_loss_function(nn.Module):

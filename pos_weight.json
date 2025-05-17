@@ -1,0 +1,5 @@
+{
+  "dataset": "damon",
+  "model": "smpl",
+  "pos_weight": 6.4505520743610765
+}

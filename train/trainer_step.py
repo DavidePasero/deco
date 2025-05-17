@@ -23,7 +23,7 @@ class TrainStepper():
         self.lr = learning_rate
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
-        self.semantic_contact_loss = MultiClassContactLoss().to(device)
+        self.semantic_contact_loss = MultiClassContactLoss(pos_weight=6.451).to(device)
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -121,9 +121,9 @@ class TrainStepper():
 
         # Forward pass
         if self.context:
-            cont, sem_mask_pred, part_mask_pred, semantic_cont = self.model(img)
+            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img)
         else:
-            cont, semantic_cont = self.model(img)
+            cont, semantic_logits = self.model(img)
 
         if self.context:
             loss_sem = self.sem_loss(sem_mask_gt, sem_mask_pred)
@@ -132,7 +132,7 @@ class TrainStepper():
         valid_polygon_contact_2d = has_polygon_contact_2d
 
         # CONTACT LOSS CALCULATION
-        total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(semantic_cont, semantic_contact_labels)
+        total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(cont, semantic_logits, semantic_contact_labels)
 
 
         if self.pal_loss_weight > 0 and (is_smplx == 0).sum() > 0:
@@ -262,9 +262,9 @@ class TrainStepper():
         # Forward pass
         initial_time = time.time()
         if self.context:
-            cont, sem_mask_pred, part_mask_pred, semantic_cont = self.model(img)
+            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img)
         else:
-            cont, semantic_cont = self.model(img)
+            cont, semantic_logits = self.model(img)
         time_taken = time.time() - initial_time
 
         if self.context:
@@ -275,7 +275,7 @@ class TrainStepper():
         valid_polygon_contact_2d = has_polygon_contact_2d
 
         # CONTACT LOSS CALCULATION
-        total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(semantic_cont, semantic_contact_labels)
+        total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(cont, semantic_logits, semantic_contact_labels)
 
         if self.pal_loss_weight > 0 and (
                 is_smplx == 0).sum() > 0:  # PAL loss only on 2D contacts in HOT which only has SMPL

@@ -198,23 +198,17 @@ class DECO(nn.Module):
             # Strategy:
             #   • Run the shared classifier on *all* vertices in parallel
             #     → logits_all : [B, C, 6890]
-            #   • Convert contact logits to a boolean mask via logit>0
-            #     (equivalent to sigmoid(logit) > 0.5).
-            #   • Zero‑out logits for non‑contact vertices
             # ------------------------------------------------------------------
             feats = att.squeeze(1)                       # [B, F]
             logits_all = self.semantic_classif(feats)    # [B, C, 6890]
-
-            contact_mask = (cont.squeeze(1) > 0.5)         # [B, 6890]  (logit>0 ≡ p>0.5)
-            semantic_cont = logits_all * contact_mask.unsqueeze(1)  # broadcast mask
         else:
             # Semantic contact prediction with the separate (non‑shared) classifier
             semantic_cont = self.semantic_classif(att)
 
         if self.context: 
-            return cont, sem_mask_pred, part_mask_pred, semantic_cont
+            return cont, sem_mask_pred, part_mask_pred, logits_all
 
-        return cont, semantic_cont
+        return cont, logits_all
 
     def _dinov2_forward_pass_shared_encoder(self, img):
         if self.train_backbone:
@@ -293,8 +287,5 @@ class DINOContact(nn.Module):
         if self.semantic_classif is not None:
             feats = features.squeeze(1)                  # [B, F]
             logits_all = self.semantic_classif(feats)    # [B, C, 6890]
-
-            contact_mask = (cont.squeeze(1) > 0.5)         # [B, 6890]
-            semantic_cont = logits_all * contact_mask.unsqueeze(1)  # broadcast mask
-            return cont, semantic_cont
+            return cont, logits_all
         return cont
