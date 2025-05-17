@@ -1,4 +1,4 @@
-from utils.loss import sem_loss_function, class_loss_function, pixel_anchoring_function, SemanticContactLoss, MultiClassContactLoss
+from utils.loss import sem_loss_function, class_loss_function, pixel_anchoring_function, MultiClassContactLoss
 import torch
 import os
 import time
