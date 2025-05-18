@@ -1,6 +1,6 @@
-EXP_NAME: 'dino-contact-for-real(other_one_is_baseline)'
+EXP_NAME: 'lora_deco_dino_backbone_1_enc'
 PROJECT_NAME: 'DECO_demo_training'
-OUTPUT_DIR: 'dino-contact-for-real_results'
+OUTPUT_DIR: 'lora_deco_dino_backbone_1_enc'
 CONDOR_DIR: ''
 DATASET:
   BATCH_SIZE: 32
@@ -12,9 +12,9 @@ OPTIMIZER:
   NUM_UPDATE_LR: 30
 TRAINING:
   ENCODER: 'dinov2-giant'
-  NUM_ENCODER: 2
-  MODEL_TYPE: "dinoContact"
-  CONTEXT: [False]
+  NUM_ENCODER: 1
+  MODEL_TYPE: "deco"
+  CONTEXT: [True]
   NUM_EPOCHS: 100
   NUM_EARLY_STOP: 50
   SUMMARY_STEPS: 5
@@ -22,13 +22,13 @@ TRAINING:
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/dinoContact.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/lora_deco_dino_backbone_1_enc.pth'
   LOSS_WEIGHTS: 1.
   PAL_LOSS_WEIGHTS: 0.01
   SEMANTIC_CLASSIFIER: True
   SHARED_SEMANTIC_CLASSIFIER: True
   CLASSIFIER_TYPE: "shared"
-  TRAIN_BACKBONE: False #only for DINO backbone
+  TRAIN_BACKBONE: True #only for DINO backbone
 VALIDATION:
   SUMMARY_STEPS: 5
   DATASETS: ['damon']

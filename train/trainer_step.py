@@ -40,7 +40,7 @@ class TrainStepper():
         if deco_model.__class__.__name__ == 'DINOContact':  # Check if we are using simply DINOContact
             self.optimizer_contact = torch.optim.Adam(
                 params=list(self.model.classifier.parameters()) +
-                       (list(self.model.encoder.parameters()) if self.model.train_backbone else []),
+                       [p for p in self.model.encoder.parameters() if p.requires_grad],
                 lr=learning_rate,
                 weight_decay=0.0001)
         elif deco_model.__class__.__name__ == 'DECO':
@@ -49,21 +49,21 @@ class TrainStepper():
                     self.optimizer_sem = torch.optim.Adam(
                         params=list(self.model.scene_projector.parameters()) +
                                list(self.model.decoder_sem.parameters()) +
-                               (list(self.model.encoder.parameters()) if self.model.train_backbone else []),
+                               [p for p in self.model.encoder.parameters() if p.requires_grad],
                         lr=learning_rate, weight_decay=0.0001)
                     self.optimizer_part = torch.optim.Adam(
                         params=list(self.model.decoder_part.parameters()) +
                                list(self.model.contact_projector.parameters()) +
-                               (list(self.model.encoder.parameters()) if self.model.train_backbone else []),
+                               [p for p in self.model.encoder.parameters() if p.requires_grad],
                         lr=learning_rate,
                         weight_decay=0.0001)
                 else:
                     self.optimizer_sem = torch.optim.Adam(
-                        params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()) +
+                        params=[p for p in self.model.encoder_sem.parameters() if p.requires_grad] + list(self.model.decoder_sem.parameters()) +
                                (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                         lr=learning_rate, weight_decay=0.0001)
                     self.optimizer_part = torch.optim.Adam(
-                        params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()) +
+                        params=[p for p in self.model.encoder_part.parameters() if p.requires_grad] + list(self.model.decoder_part.parameters()) +
                         (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                         lr=learning_rate,
                         weight_decay=0.0001)
@@ -72,16 +72,16 @@ class TrainStepper():
                 self.optimizer_contact = torch.optim.Adam(
                     params=list(self.model.scene_projector.parameters()) + list(
                         self.model.contact_projector.parameters()) + list(
-                        self.model.cross_att.parameters()) + list(self.model.classif.parameters()) + (list(
-                        self.model.encoder.parameters()) if self.model.train_backbone else []) +
+                        self.model.cross_att.parameters()) + list(self.model.classif.parameters()) +
+                        [p for p in self.model.encoder.parameters() if p.requires_grad] +
                         (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                     lr=learning_rate,
                     weight_decay=0.0001)
             else:
                 self.optimizer_contact = torch.optim.Adam(
-                    params=list(self.model.encoder_sem.parameters()) + list(
-                        self.model.encoder_part.parameters()) + list(
-                        self.model.cross_att.parameters()) + list(self.model.classif.parameters())
+                    params=[p for p in self.model.encoder_sem.parameters() if p.requires_grad] + 
+                        [p for p in self.model.encoder_part.parameters() if p.requires_grad] + 
+                        list(self.model.cross_att.parameters()) + list(self.model.classif.parameters())
                     + (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                     lr=learning_rate,
                     weight_decay=0.0001)

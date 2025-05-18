@@ -2,6 +2,7 @@ from models.components import Encoder, Cross_Att, Decoder, Classifier, SemanticC
 import torch.nn as nn
 import torch
 from dataclasses import dataclass
+from peft import LoraConfig, get_peft_model, TaskType
 
 @dataclass
 class DINOv2DIM:
@@ -62,14 +63,23 @@ def shared_semantic_classifier(self, att, cont):
     return semantic_cont
 
 class DECO(nn.Module):
-    def __init__(self, encoder, context, device, classifier_type='shared',
-                 train_backbone: bool = False, num_encoders: int = 1):
+    def __init__(self,
+                 encoder,
+                 context,
+                 device,
+                 classifier_type='shared',
+                 num_encoders: int = 1,
+                 use_vlm: bool = False,
+                 train_backbone: bool = False,
+                 lora_r: int = 8,
+                 lora_alpha: int = 32,):
         super(DECO, self).__init__()
         self.encoder_type = encoder
         self.context = context
         self.classifier_type = classifier_type
-        self.train_backbone = train_backbone
         self.num_encoders = num_encoders
+        self.train_backbone = train_backbone
+        self.use_vlm = use_vlm
 
         if self.encoder_type == 'hrnet':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
@@ -113,6 +123,16 @@ class DECO(nn.Module):
                 self.scene_projector = nn.Linear(hidden_dim, 1024).to(device)
                 self.contact_projector = nn.Linear(hidden_dim, 1024).to(device)
 
+            # Freeze DINOv2 backbone parameters
+            if self.num_encoder > 1:
+                for p in self.encoder_sem.parameters():
+                    p.requires_grad = False
+                for p in self.encoder_part.parameters():
+                    p.requires_grad = False
+            else:
+                for p in self.encoder.parameters():
+                    p.requires_grad = False
+
             self.correction_conv = nn.Conv1d(hidden_dim, 1024, 1).to(device)
 
             if self.context:
@@ -126,6 +146,27 @@ class DECO(nn.Module):
                 self.semantic_classif = SharedSemanticClassifier(1024).to(device)
             else:
                 self.semantic_classif = SemanticClassifier(1024).to(device)
+
+            # ---- LoRA adaptation on DINOv2 backbone ----
+            if self.train_backbone and 'dinov2' in self.encoder_type:
+                lora_cfg = LoraConfig(
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                    r=lora_r,
+                    lora_alpha=lora_alpha,
+                    target_modules=[
+                        "attention.attention.query",
+                        "attention.attention.key",
+                        "attention.attention.value",
+                        "attention.output.dense"
+                    ]
+                )
+                if self.num_encoder > 1:
+                    # wrap both encoders with LoRA
+                    self.encoder_sem = get_peft_model(self.encoder_sem, lora_cfg)
+                    self.encoder_part = get_peft_model(self.encoder_part, lora_cfg)
+                else:
+                    # wrap single shared encoder with LoRA
+                    self.encoder = get_peft_model(self.encoder, lora_cfg)
 
         else:
             NotImplementedError('Encoder type not implemented')
@@ -211,11 +252,7 @@ class DECO(nn.Module):
         return cont, logits_all
 
     def _dinov2_forward_pass_shared_encoder(self, img):
-        if self.train_backbone:
-            features = self.encoder(img)
-        else:
-            with torch.no_grad():
-                features = self.encoder(img)
+        features = self.encoder(img)
 
         sem_enc_out = self.scene_projector(features)
         part_enc_out = self.contact_projector(features)

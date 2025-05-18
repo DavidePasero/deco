@@ -26,8 +26,10 @@ class Encoder(nn.Module):
         else:
             raise NotImplementedError('Encoder not implemented')
 
-    def forward(self, x):
+    def forward(self, x=None, **kwargs):
         if "dinov2" in self.encoder_name:
+            # LoRA passes input_ids instead of x.
+            x = x if x is not None else kwargs.get('input_ids')
             outputs = self.encoder(x)
             last_hidden_states = outputs.last_hidden_state
             cls_token_embedding = last_hidden_states[:, 0]
