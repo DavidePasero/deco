@@ -27,3 +27,6 @@ deco_dino_backbone_outputs/
 deco_dino_backbone_results/
 deco_baseline_out/
 DECO_2_enc_DINO_BCKBN_FINETUNE_results/
+challenges/
+*_out/
+*_results/
