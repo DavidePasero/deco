@@ -9,6 +9,10 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import SentenceTransformer, util
 import logging
 
+from models.vlm import VLMManager
+from models.utils import pad_and_stack
+
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,16 +41,17 @@ def get_sentence_transformer():
 def mask_split(img, num_parts):
     if not len(img.shape) == 2:
         img = img[:, :, 0]
-    mask = np.zeros((img.shape[0], img.shape[1], num_parts))
+    mask = np.ones((img.shape[0], img.shape[1], num_parts))
     for i in np.unique(img):
         mask[:, :, i] = np.where(img == i, 1., 0.)
     return np.transpose(mask, (2, 0, 1))
 
 class BaseDataset(Dataset):
 
-    def __init__(self, dataset, mode, model_type='smpl', normalize=False):
+    def __init__(self, dataset, mode, model_type='smpl', normalize=False, use_vlm: bool = True):
         self.dataset = dataset
         self.mode = mode
+        self.use_vlm = use_vlm
 
         print(f'Loading dataset: {constants.DATASET_FILES[mode][dataset]} for mode: {mode}')
 
@@ -111,25 +116,25 @@ class BaseDataset(Dataset):
 
         self.normalize = normalize
         self.normalize_img = Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD)
-        
+
         # Initialize object class embeddings cache
         self.object_classes = [
-            'airplane', 'apple', 'backpack', 'banana', 'baseball_bat', 'baseball_glove', 
-            'bed', 'bench', 'bicycle', 'boat', 'book', 'bottle', 'bowl', 'broccoli', 
-            'bus', 'cake', 'car', 'carrot', 'cell_phone', 'chair', 'clock', 'couch', 
-            'cup', 'dining_table', 'donut', 'fire_hydrant', 'fork', 'frisbee', 
-            'hair_drier', 'handbag', 'hot_dog', 'keyboard', 'kite', 'knife', 'laptop', 
-            'microwave', 'motorcycle', 'mouse', 'orange', 'oven', 'parking_meter', 
-            'pizza', 'potted_plant', 'refrigerator', 'remote', 'sandwich', 'scissors', 
-            'sink', 'skateboard', 'skis', 'snowboard', 'spoon', 'sports_ball', 
-            'stop_sign', 'suitcase', 'supporting', 'surfboard', 'teddy_bear', 
-            'tennis_racket', 'tie', 'toaster', 'toilet', 'toothbrush', 'traffic_light', 
+            'airplane', 'apple', 'backpack', 'banana', 'baseball_bat', 'baseball_glove',
+            'bed', 'bench', 'bicycle', 'boat', 'book', 'bottle', 'bowl', 'broccoli',
+            'bus', 'cake', 'car', 'carrot', 'cell_phone', 'chair', 'clock', 'couch',
+            'cup', 'dining_table', 'donut', 'fire_hydrant', 'fork', 'frisbee',
+            'hair_drier', 'handbag', 'hot_dog', 'keyboard', 'kite', 'knife', 'laptop',
+            'microwave', 'motorcycle', 'mouse', 'orange', 'oven', 'parking_meter',
+            'pizza', 'potted_plant', 'refrigerator', 'remote', 'sandwich', 'scissors',
+            'sink', 'skateboard', 'skis', 'snowboard', 'spoon', 'sports_ball',
+            'stop_sign', 'suitcase', 'supporting', 'surfboard', 'teddy_bear',
+            'tennis_racket', 'tie', 'toaster', 'toilet', 'toothbrush', 'traffic_light',
             'train', 'truck', 'tv', 'umbrella', 'vase', 'wine_glass'
         ]
-        
+
         # Cache for object name mappings to avoid recomputing
         self.object_name_mapping_cache = {}
-        
+
         # Precompute embeddings for object classes if sentence transformer is available
         self.object_embeddings = None
         model = get_sentence_transformer()
@@ -137,6 +142,11 @@ class BaseDataset(Dataset):
             # Replace underscores with spaces for better semantic matching
             class_names = [name.replace('_', ' ') for name in self.object_classes]
             self.object_embeddings = model.encode(class_names, convert_to_tensor=True)
+
+        if self.use_vlm:
+                self.vlm_manager = VLMManager()
+                if not self.vlm_manager.check_cache(self.images):
+                    self.vlm_manager.extract_from_paths(self.images)
 
     def _map_object_to_coco_class(self, obj_name):
         """
@@ -226,10 +236,10 @@ class BaseDataset(Dataset):
         if self.has_semantic_contact[index]:
             # Get the object-wise contact labels
             objectwise_contacts = self.contact_labels_objectwise[index]
-            
+
             # Create a tensor of shape [num_object_classes, n_vertices]
             semantic_contact = np.zeros((self.num_object_classes, self.n_vertices))
-            
+
             # Fill in the semantic contact tensor
             # objectwise_contacts is a dictionary with object names as keys and vertex indices as values
             for obj_name, vertex_indices in objectwise_contacts.items():
@@ -300,7 +310,60 @@ class BaseDataset(Dataset):
         item['has_semantic_contact'] = self.has_semantic_contact[index]
         item['has_polygon_contact_2d'] = self.has_polygon_contact_2d[index]
 
+
+        if self.use_vlm:
+            item["vlm_features"] = self.vlm_manager[self.images[index]]
+
         return item
+
 
     def __len__(self):
         return len(self.images)
+
+
+class VLMFeatureCollator:
+    def __init__(self, pad_and_stack_func=pad_and_stack):
+        """
+        Custom collator for VLM features.
+
+        Args:
+            pad_and_stack_func (callable): Function to pad and stack a list of feature tensors.
+        """
+        self.pad_and_stack = pad_and_stack_func
+
+
+    def __call__(self, batch):
+        """
+        Pads and stacks the 'vlm_features' in a batch of dictionaries.
+
+        Args:
+            batch (list of dict): List of dictionaries where one key is 'vlm_features'.
+
+        Returns:
+            list of dict: The same list of dictionaries but with padded 'vlm_features'.
+        """
+
+        keys = batch[0].keys()
+
+        # Initialize a dictionary to hold the batched tensors
+        batched_tensors = {}
+
+        for key in keys:
+            # Special handling for vlm_features
+            if key == "img_path":
+                values = [item[key] for item in batch]
+                batched_tensors[key] = values
+
+            elif key == "vlm_features":
+                vlm_features = [item["vlm_features"] for item in batch]
+                batched_tensors[key] = self.pad_and_stack(vlm_features)
+            else:
+                # Stack normally for other keys
+                values = [item[key] for item in batch]
+                if isinstance(values[0], torch.Tensor):
+                    batched_tensors[key] = torch.stack(values)
+                elif isinstance(values[0], np.ndarray):
+                    batched_tensors[key] = torch.tensor(np.array(values))
+                else:
+                    batched_tensors[key] = torch.tensor(values)
+        return batched_tensors

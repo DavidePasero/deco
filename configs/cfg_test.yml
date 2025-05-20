@@ -11,17 +11,23 @@ OPTIMIZER:
   LR: [5e-5]
   NUM_UPDATE_LR: 3
 TRAINING:
-  ENCODER: 'hrnet'
-  CONTEXT: [True]
-  NUM_EPOCHS: 1
-  NUM_EARLY_STOP: 10
+  ENCODER: 'dinov2-giant'
+  NUM_ENCODER: 2
+  MODEL_TYPE: "dinoContact"
+  CONTEXT: [False]
+  NUM_EPOCHS: 100
+  NUM_EARLY_STOP: 50
   SUMMARY_STEPS: 5
-  CHECKPOINT_EPOCHS: 5
+  CHECKPOINT_EPOCHS: 20
   DATASETS: ['damon']
-  DATASET_MIX_PDF: ['1.']
+  DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
   BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/dino-contact-for-real(other_one_is_baseline)_best.pth'
   PAL_LOSS_WEIGHTS: 0.0
+  SEMANTIC_CLASSIFIER: True
+  SHARED_SEMANTIC_CLASSIFIER: True
+  CLASSIFIER_TYPE: "shared"
+  TRAIN_BACKBONE: False #only for DINO backbone
 VALIDATION:
   SUMMARY_STEPS: 1000
   DATASETS: ['damon']
