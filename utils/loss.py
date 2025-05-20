@@ -32,7 +32,6 @@ class MultiClassContactLoss(nn.Module):
         contact_weight: float = 1.0,
         class_weight: float   = 0.5,
         dist_weight: float    = 0.08,           
-        pos_weight: float     = None            # computed from data if not provided
     ):
         super().__init__()
         self.num_classes   = num_classes
@@ -40,10 +39,12 @@ class MultiClassContactLoss(nn.Module):
         self.class_w       = class_weight
         self.dist_w        = dist_weight
 
+        # Load per-vertex effective-number pos weights
+        pos_weight_arr = torch.from_numpy(np.load("pos_weight_damon.pt")).float()
         # You can pass a tensor of size [1] or compute externally.
         self.bce_contact = nn.BCEWithLogitsLoss(
             reduction="mean",
-            pos_weight=torch.tensor([pos_weight]) if pos_weight is not None else None
+            pos_weight=pos_weight_arr
         )
         # per-class loss (one‐hot targets) – weight can be tuned per class later
         self.ce_class = nn.CrossEntropyLoss(reduction="none")

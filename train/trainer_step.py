@@ -23,7 +23,7 @@ class TrainStepper():
         self.lr = learning_rate
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
-        self.semantic_contact_loss = MultiClassContactLoss(pos_weight=6.451).to(device)
+        self.semantic_contact_loss = MultiClassContactLoss().to(device)
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
