@@ -19,3 +19,10 @@ vis/__pycache__/visualize.cpython-39.pyc
 __pycache__/
 
 runs/
+cache/
+
+*.pkl
+
+dino-contact_results/
+
+*.zip

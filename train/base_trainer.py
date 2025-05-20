@@ -105,7 +105,7 @@ def evaluator(val_loader, solver, hparams, epoch=0, dataset_name='Unknown', norm
     eval_dict['cont_f1'] = np.sum(val_epoch_cont_f1) / dataset_size
     eval_dict['fp_geo_err'] = np.sum(val_epoch_fp_geo_err) / dataset_size
     eval_dict['fn_geo_err'] = np.sum(val_epoch_fn_geo_err) / dataset_size
-    eval_dict["semantic_accuracy"] = np.sum(acc) / dataset_size
+    eval_dict["semantic_accuracy"] = np.sum(val_epoch_semantic_acc) / dataset_size
 
     if hparams.TRAINING.CONTEXT:
         eval_dict['sem_iou'] = np.sum(val_epoch_sem_iou) / dataset_size

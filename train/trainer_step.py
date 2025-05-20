@@ -27,7 +27,7 @@ class TrainStepper():
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.writer = SummaryWriter(os.path.join(log_dir, f"train_{timestamp}_{run_name}"))
+        self.writer = SummaryWriter(os.path.join(log_dir, f"train_{timestamp}_{run_name}")) if log_dir is not None else None
 
     def _log(self, mode, losses, step):
         for key, value in losses.items():
@@ -74,15 +74,18 @@ class TrainStepper():
                         self.model.contact_projector.parameters()) + list(
                         self.model.cross_att.parameters()) + list(self.model.classif.parameters()) + (list(
                         self.model.encoder.parameters()) if self.model.train_backbone else []) +
-                        (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
+                        (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []) +
+                           self.model._get_vlm_params(),
                     lr=learning_rate,
                     weight_decay=0.0001)
             else:
                 self.optimizer_contact = torch.optim.Adam(
                     params=list(self.model.encoder_sem.parameters()) + list(
                         self.model.encoder_part.parameters()) + list(
-                        self.model.cross_att.parameters()) + list(self.model.classif.parameters())
-                    + (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
+                        self.model.cross_att.parameters()) + list(self.model.classif.parameters())+
+                           (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv")
+                            else []) +
+                           self.model._get_vlm_params(),
                     lr=learning_rate,
                     weight_decay=0.0001)
 
@@ -119,11 +122,15 @@ class TrainStepper():
         semantic_contact_labels = batch['semantic_contact'].to(self.device)
         has_semantic_contact = batch['has_semantic_contact'].to(self.device)
 
+        vlm_feats = batch.get('vlm_features')
+        vlm_feats = vlm_feats.to(self.device) if vlm_feats is not None else None
+
         # Forward pass
         if self.context:
-            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img)
+            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img, vlm_feats=vlm_feats)
+
         else:
-            cont, semantic_logits = self.model(img)
+            cont, semantic_logits = self.model(img, vlm_feats=batch.get('vlm_features').to(self.device))
 
         if self.context:
             loss_sem = self.sem_loss(sem_mask_gt, sem_mask_pred)
@@ -152,7 +159,7 @@ class TrainStepper():
             loss_pix_anchoring = loss_pix_anchoring_smpl * (is_smplx == 0).sum() / len(is_smplx)
             contact_2d_pred_rgb = contact_2d_pred_rgb_smpl
         else:
-            loss_pix_anchoring = 0
+            loss_pix_anchoring = torch.tensor(0)
             contact_2d_pred_rgb = torch.zeros_like(polygon_contact_2d)
         
         if self.context:
@@ -264,12 +271,15 @@ class TrainStepper():
         semantic_contact_labels = batch['semantic_contact'].to(self.device)
         has_semantic_contact = batch['has_semantic_contact'].to(self.device)
 
+        vlm_feats = batch.get('vlm_features')
+        vlm_feats = vlm_feats.to(self.device) if vlm_feats is not None else None
+
         # Forward pass
         initial_time = time.time()
         if self.context:
-            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img)
+            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img, vlm_feats)
         else:
-            cont, semantic_logits = self.model(img)
+            cont, semantic_logits = self.model(img, vlm_feats)
         time_taken = time.time() - initial_time
 
         if self.context:
@@ -376,15 +386,17 @@ class TrainStepper():
             },
                 model_path)
 
-    def load(self, model_path):
+    def load(self, model_path, load_optims: bool = True):
         print(f'~~~ Loading existing checkpoint from {model_path} ~~~')
         checkpoint = torch.load(model_path, weights_only=False)
-        self.model.load_state_dict(checkpoint['deco'], strict=True)
+        key = "deco" if self.model.__class__.__name__ == "DECO" else "dinocontact"
+        self.model.load_state_dict(checkpoint[key], strict=True)
 
-        if self.context:
-            self.optimizer_sem.load_state_dict(checkpoint['sem_optim'])
-            self.optimizer_part.load_state_dict(checkpoint['part_optim'])
-        self.optimizer_contact.load_state_dict(checkpoint['contact_optim'])
+        if load_optims:
+            if self.context:
+                self.optimizer_sem.load_state_dict(checkpoint['sem_optim'])
+                self.optimizer_part.load_state_dict(checkpoint['part_optim'])
+            self.optimizer_contact.load_state_dict(checkpoint['contact_optim'])
         epoch = checkpoint['epoch']
         f1 = checkpoint['f1']
         return epoch, f1

@@ -43,6 +43,7 @@ hparams.TRAINING.SEMANTIC_CLASSIFIER = False
 hparams.TRAINING.SHARED_SEMANTIC_CLASSIFIER = True
 hparams.TRAINING.TRAIN_BACKBONE = False
 hparams.TRAINING.NUM_ENCODER = 1
+hparams.TRAINING.USE_VLM = False
 
 # Training hparams
 hparams.VALIDATION = CN()
