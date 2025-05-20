@@ -1,4 +1,4 @@
-EXP_NAME: 'damon_hrnet_testing'
+EXP_NAME: 'dinoContact_results'
 PROJECT_NAME: 'DECO_DAMON_Testing'
 OUTPUT_DIR: 'deco_results'
 CONDOR_DIR: ''
@@ -20,7 +20,7 @@ TRAINING:
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.']
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Release_Checkpoint/deco_best.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/dino-contact-for-real(other_one_is_baseline)_best.pth'
   PAL_LOSS_WEIGHTS: 0.0
 VALIDATION:
   SUMMARY_STEPS: 1000

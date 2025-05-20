@@ -7,14 +7,30 @@ import cv2
 import PIL.Image as pil_img
 from loguru import logger
 import shutil
+import matplotlib.pyplot as plt
+from PIL import ImageDraw, ImageFont
 
 import trimesh
 import pyrender
 
-from models.deco import DECO
+from models.deco import DECO, DINOContact
 from common import constants
 
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
+
+object_classes = [
+    'airplane', 'apple', 'backpack', 'banana', 'baseball_bat', 'baseball_glove', 
+    'bed', 'bench', 'bicycle', 'boat', 'book', 'bottle', 'bowl', 'broccoli', 
+    'bus', 'cake', 'car', 'carrot', 'cell_phone', 'chair', 'clock', 'couch', 
+    'cup', 'dining_table', 'donut', 'fire_hydrant', 'fork', 'frisbee', 
+    'hair_drier', 'handbag', 'hot_dog', 'keyboard', 'kite', 'knife', 'laptop', 
+    'microwave', 'motorcycle', 'mouse', 'orange', 'oven', 'parking_meter', 
+    'pizza', 'potted_plant', 'refrigerator', 'remote', 'sandwich', 'scissors', 
+    'sink', 'skateboard', 'skis', 'snowboard', 'spoon', 'sports_ball', 
+    'stop_sign', 'suitcase', 'supporting', 'surfboard', 'teddy_bear', 
+    'tennis_racket', 'tie', 'toaster', 'toilet', 'toothbrush', 'traffic_light', 
+    'train', 'truck', 'tv', 'umbrella', 'vase', 'wine_glass'
+]
 
 if torch.cuda.is_available():
     device = torch.device('cuda')
@@ -22,11 +38,24 @@ else:
     device = torch.device('cpu')
 
 def initiate_model(args):
-    deco_model = DECO('hrnet', True, device)
+    if args.model_type == 'deco':
+        deco_model = DECO(args.encoder, args.context, args.device,
+                          args.classifier_type)  # set up DinoContact here
+    elif args.model_type ==  'dinoContact':
+        deco_model = DINOContact(args.device)
+    else:
+        raise ValueError('Model type not supported')
 
     logger.info(f'Loading weights from {args.model_path}')
-    checkpoint = torch.load(args.model_path)
-    deco_model.load_state_dict(checkpoint['deco'], strict=True)
+    checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
+
+    #### DEBUG
+    if args.model_type == 'dinoContact':
+        state_dict_model = 'dinocontact'
+    else:
+        state_dict_model = 'deco'
+
+    deco_model.load_state_dict(checkpoint[state_dict_model], strict=False)
 
     deco_model.eval()
 
@@ -149,29 +178,88 @@ def main(args):
         img = img[np.newaxis,:,:,:]
         img = torch.tensor(img, dtype = torch.float32).to(device)
 
-        cont, _, _ = deco_model(img)
-        cont = cont.detach().cpu().numpy().squeeze()
-        cont_smpl = []
-        for indx, i in enumerate(cont):
-            if i >= 0.5:
-                cont_smpl.append(indx)
+        if args.model_type == 'dinoContact':
+            cont, semantic_logits = deco_model(img)
+        else:
+            cont, semantic_logits = deco_model(img)
+        cont = cont.detach().cpu()                 # keep as Tensor
+        semantic_logits = semantic_logits.detach().cpu()          # keep as Tensor
+        
+        cont_np = cont.numpy()[0]                  # [V] for later Python loops
+        
+        # cont            : [B, V]        – probabilities in [0,1]
+        # semantic_logits : [B, C, V]     – raw logits (no softmax)
+
+        # 1. Threshold the binary contact map
+        contact_mask = (cont >= 0.5)                           # [B, V]   bool
+
+        # 2. Find the winning object class per vertex
+        #    (still shape [B, 1, V] so we can scatter)
+        winning_idx = torch.argmax(semantic_logits, dim=1, keepdim=True)   # [B, 1, V]  long
+
+        # 3. Build the output tensor
+        semantic_cont = torch.zeros_like(semantic_logits, dtype=cont.dtype)  # [B, C, V]
+
+        #    Put a 1 at the winning index for every vertex
+        semantic_cont.scatter_(1, winning_idx, 1.0)             # ones at winners, zeros elsewhere
+
+        # 4. Zero–out vertices predicted as “no contact”
+        semantic_cont *= contact_mask.unsqueeze(1).float()      # keep only vertices with cont ≥ 0.5
+
+        # Get contact vertices
+        cont_smpl = np.where(cont_np >= 0.5)[0].tolist()
         
         img = img.detach().cpu().numpy()		
         img = np.transpose(img[0], (1, 2, 0))		
         img = img * 255		
         img = img.astype(np.uint8)
         
-        contact_smpl = np.zeros((1, 1, 6890))
-        contact_smpl[0][0][cont_smpl] = 1
-
+        # Create mesh with default color
         body_model_smpl = trimesh.load(smpl_path, process=False)
         for vert in range(body_model_smpl.visual.vertex_colors.shape[0]):
             body_model_smpl.visual.vertex_colors[vert] = args.mesh_colour
-        body_model_smpl.visual.vertex_colors[cont_smpl] = args.annot_colour
+        
+        # Find which classes are actually present in the predictions
+        # Build per‑vertex → class mapping
+        vertex_classes = {}
+        for vertex_idx in cont_smpl:                       # cont_smpl from your loop
+            class_idx = int(np.argmax(semantic_cont[0, :, vertex_idx]))
+            vertex_classes.setdefault(class_idx, []).append(vertex_idx)
 
+        # Create a palette for the classes that really appear
+        present_classes = sorted(vertex_classes.keys())
+        num_present      = len(present_classes)
+        cmap_name        = 'tab10' if num_present <= 10 else 'tab20'
+        cmap             = plt.cm.get_cmap(cmap_name, num_present)
+
+        class_colors = {
+            class_idx: np.array([*(np.asarray(cmap(i)[:3]) * 255).astype(int), 255])
+            for i, class_idx in enumerate(present_classes)
+        }
+
+        # Apply colors to the mesh
+        for class_idx, vertices in vertex_classes.items():
+            body_model_smpl.visual.vertex_colors[vertices] = class_colors[class_idx]
+
+        # ---------- NEW: build class‑name dictionary here ----------
+        # Build class‑name dictionary using the global `object_classes` list
+        class_names = {
+            idx: object_classes[idx] if idx < len(object_classes) else f"Class {idx}"
+            for idx in present_classes
+        }
+
+        # Create the colour legend
+        legend_img = create_color_legend(class_colors, class_names, img.shape[0])
+        
+        # Render the mesh
         rend = create_scene(body_model_smpl, img)
+        
+        # Save the rendered image
         os.makedirs(os.path.join(args.out_dir, 'Renders'), exist_ok=True) 
         rend.save(os.path.join(args.out_dir, 'Renders', os.path.basename(img_name).split('.')[0] + '.png'))
+        
+        # Save the legend
+        legend_img.save(os.path.join(args.out_dir, 'Renders', os.path.basename(img_name).split('.')[0] + '_legend.png'))
                   
         out_dir = os.path.join(args.out_dir, 'Preds', os.path.basename(img_name).split('.')[0])
         os.makedirs(out_dir, exist_ok=True)          
@@ -180,13 +268,75 @@ def main(args):
         shutil.copyfile(img_name, os.path.join(out_dir, os.path.basename(img_name)))
         body_model_smpl.export(os.path.join(out_dir, 'pred.obj'))
 
+def create_color_legend(class_colors, class_names, height=256):
+    """Create a legend image showing the color mapping for semantic classes"""
+    # Create a PIL image for the legend
+    legend_width = 200
+    box_height = 30
+    legend_height = box_height * len(class_colors)
+    legend = pil_img.new('RGB', (legend_width, legend_height), (255, 255, 255))
+    draw = ImageDraw.Draw(legend)
+    
+    # Try to load a font, use default if not available
+    try:
+        font = ImageFont.truetype("arial.ttf", 14)
+    except IOError:
+        font = ImageFont.load_default()
+    
+    # Draw color boxes and labels
+    for i, (class_idx, color) in enumerate(class_colors.items()):
+        y = i * box_height
+        # Draw colored rectangle
+        draw.rectangle([(10, y + 5), (40, y + 25)], fill=tuple(color[:3]))
+        # Draw class name
+        draw.text((50, y + 10), class_names[class_idx], fill=(0, 0, 0), font=font)
+    
+    # Resize to match the height of the input image if needed
+    if height != legend_height:
+        legend = legend.resize((legend_width, height), pil_img.LANCZOS)
+    
+    return legend
+
+def create_empty_legend(height=256):
+    """Create a legend indicating no contacts were detected"""
+    legend_width = 200
+    legend = pil_img.new('RGB', (legend_width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(legend)
+    
+    try:
+        font = ImageFont.truetype("arial.ttf", 14)
+    except IOError:
+        font = ImageFont.load_default()
+    
+    draw.text((10, height//2), "No contacts detected", fill=(0, 0, 0), font=font)
+    
+    return legend
+
 if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--img_src', help='Source of image(s). Can be file or directory', default='./demo_out', type=str)
-    parser.add_argument('--out_dir', help='Where to store images', default='./demo_out', type=str)
-    parser.add_argument('--model_path', help='Path to best model weights', default='./checkpoints/Release_Checkpoint/deco_best.pth', type=str)
-    parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+', type=int, default=[130, 130, 130, 255])
-    parser.add_argument('--annot_colour', help='Colour of the mesh', nargs='+', type=int, default=[0, 255, 0, 255])
-    args = parser.parse_args()
+    if __name__ == '__main__':
+        parser = argparse.ArgumentParser(description="3D Mesh Rendering and Semantic Contact Visualization")
+        parser.add_argument('--img_src', help='Source of image(s). Can be file or directory',
+                            default='./demo_out', type=str)
+        parser.add_argument('--out_dir', help='Where to store images',
+                            default='./demo_out', type=str)
+        parser.add_argument('--model_path', help='Path to best model weights',
+                            default='./checkpoints/Other_Checkpoints/deco_shared_classifier_best.pth', type=str)
+        parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+',
+                            type=int, default=[130, 130, 130, 255])
+        parser.add_argument('--annot_colour', help='Colour of the annotation', nargs='+',
+                            type=int, default=[0, 255, 0, 255])
+        parser.add_argument('--model_type', help='Type of the model to load (deco or dinoContact)',
+                            default='deco', type=str)
+        parser.add_argument('--encoder', help='Flag to train the encoder',
+                            type=str, default="hrnet")
+        parser.add_argument('--context', help='Flag to train the context model',
+                            action='store_true')
+        parser.add_argument('--classifier_type', help='Classifier type for the model',
+                            default='shared', type=str)
+        parser.add_argument('--device', help='Device to use (cuda or cpu)',
+                            default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+
+        args = parser.parse_args()
+        main(args)
 
     main(args)

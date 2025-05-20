@@ -25,7 +25,9 @@ hparams.OPTIMIZER.NUM_UPDATE_LR = 10
 
 # Training hparams
 hparams.TRAINING = CN()
-hparams.TRAINING.ENCODER = 'hrnet'
+hparams.TRAINING.MODEL_TYPE = 'deco'
+hparams.TRAINING.ENCODER = 'dinov2'
+hparams.TRAINING.CLASSIFIER_TYPE = 'shared'
 hparams.TRAINING.CONTEXT = True
 hparams.TRAINING.NUM_EPOCHS = 50
 hparams.TRAINING.SUMMARY_STEPS = 100
@@ -37,6 +39,10 @@ hparams.TRAINING.DATASET_ROOT_PATH = '/is/cluster/work/achatterjee/rich/npzs'
 hparams.TRAINING.BEST_MODEL_PATH = '/is/cluster/work/achatterjee/weights/rich/exp/rich_exp.pth'
 hparams.TRAINING.LOSS_WEIGHTS = 1.
 hparams.TRAINING.PAL_LOSS_WEIGHTS = 1.
+hparams.TRAINING.SEMANTIC_CLASSIFIER = False
+hparams.TRAINING.SHARED_SEMANTIC_CLASSIFIER = True
+hparams.TRAINING.TRAIN_BACKBONE = False
+hparams.TRAINING.NUM_ENCODER = 1
 
 # Training hparams
 hparams.VALIDATION = CN()

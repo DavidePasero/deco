@@ -1,0 +1,35 @@
+EXP_NAME: 'dino-contact'
+PROJECT_NAME: 'DECO_demo_training'
+OUTPUT_DIR: 'dino-contact_results'
+CONDOR_DIR: ''
+DATASET:
+  BATCH_SIZE: 8
+  NUM_WORKERS: 8
+  NORMALIZE_IMAGES: [True]
+OPTIMIZER:
+  TYPE: 'adam'
+  LR: [1e-5]
+  NUM_UPDATE_LR: 30
+TRAINING:
+  ENCODER: 'dinov2-large'
+  NUM_ENCODER: 2
+  MODEL_TYPE: "dinoContact"
+  CONTEXT: [True]
+  NUM_EPOCHS: 100
+  NUM_EARLY_STOP: 50
+  SUMMARY_STEPS: 5
+  CHECKPOINT_EPOCHS: 20
+  DATASETS: ['damon']
+  DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
+  DATASET_ROOT_PATH: ''
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/original_deco.pth'
+  LOSS_WEIGHTS: 1.
+  PAL_LOSS_WEIGHTS: 0.01
+  SEMANTIC_CLASSIFIER: True
+  SHARED_SEMANTIC_CLASSIFIER: True
+  CLASSIFIER_TYPE: "shared"
+  TRAIN_BACKBONE: True #only for DINO backbone
+VALIDATION:
+  SUMMARY_STEPS: 5
+  DATASETS: ['damon']
+  MAIN_DATASET: 'damon'

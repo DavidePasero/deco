@@ -9,7 +9,7 @@ from utils.mesh_utils import save_results_mesh
 from utils.diff_renderer import Pytorch3D
 import os
 import cv2
-
+from utils.metrics import det_error_metric
 
 class sem_loss_function(nn.Module):
     def __init__(self):
@@ -19,6 +19,90 @@ class sem_loss_function(nn.Module):
     def forward(self, y_true, y_pred):
         loss = self.ce(y_pred, y_true)
         return loss
+    
+class MultiClassContactLoss(nn.Module):
+    """
+    Loss =   w_contact · BCE(any-contact)
+           + w_class   · BCE(per-class | contact)
+           + w_dist    · distance penalty  (optional)
+    """
+    def __init__(
+        self,
+        num_classes: int = 70,
+        contact_weight: float = 1.0,
+        class_weight: float   = 0.5,
+        dist_weight: float    = 0.08,           
+        pos_weight: float     = None            # computed from data if not provided
+    ):
+        super().__init__()
+        self.num_classes   = num_classes
+        self.contact_w     = contact_weight
+        self.class_w       = class_weight
+        self.dist_w        = dist_weight
+
+        # You can pass a tensor of size [1] or compute externally.
+        self.bce_contact = nn.BCEWithLogitsLoss(
+            reduction="mean",
+            pos_weight=torch.tensor([pos_weight]) if pos_weight is not None else None
+        )
+        # per-class loss (one‐hot targets) – weight can be tuned per class later
+        self.ce_class = nn.CrossEntropyLoss(reduction="none")
+
+    # -------------------------------------------------------------------- #
+    def forward(self, cont_pred: torch.Tensor, vertex_obj_pred: torch.Tensor, target: torch.Tensor):
+        """
+        Args
+        ----
+          pred   : [B, C, V]  raw logits  (NOT probabilities!)
+          target : [B, C, V]  {0,1} one-hot GT  (at most one 1 per vertex)
+
+        Returns
+        -------
+          total_loss  : scalar
+          stats       : dict of sub-losses (floats)
+        """
+
+        # ---------------------------------------------------------------- #
+        # 1) Binary "any-contact" head  (soft OR over classes)
+        # ---------------------------------------------------------------- #
+        # logit_any = log( Σ_i exp(logit_i) )   (soft maximum)
+        target_any_contact = target.any(dim=1).float()            # [B, V] in {0,1}
+
+        binary_loss = self.bce_contact(cont_pred, target_any_contact)
+
+        # ---------------------------------------------------------------- #
+        # 2) Cross entropy loss – only on vertices that truly have contact
+        # ---------------------------------------------------------------- #
+        contact_mask = target_any_contact.bool()                  # [B, V]
+
+        if contact_mask.any():
+            # Expand mask to [B, C, V] for broadcasting                    # [B,1,V]
+            per_class_loss = self.ce_class(vertex_obj_pred, target)         # [B,C,V]
+            # keep only vertices where GT has contact
+            semantic_loss = (per_class_loss * contact_mask).sum() / contact_mask.sum()
+        else:
+            semantic_loss = vertex_obj_pred.new_tensor(0.0)
+
+        # ---------------------------------------------------------------- #
+        # 3) Geodesic distance penalty (optional)
+        # ---------------------------------------------------------------- #
+        if self.dist_w > 0:
+            fp_dist, fn_dist = det_error_metric(      # returns [B,*] tensors
+                cont_pred.detach(),              # detach so only BCE grads flow
+                target_any_contact
+            )
+            dist_loss = (fp_dist.mean() + fn_dist.mean()) / 2.0
+        else:
+            dist_loss = cont_pred.new_tensor(0.0)
+
+        # ---------------------------------------------------------------- #
+        total_loss = (
+            self.contact_w * binary_loss +
+            self.class_w   * semantic_loss   +
+            self.dist_w    * dist_loss
+        )
+
+        return total_loss, binary_loss, semantic_loss, dist_loss
 
 
 class class_loss_function(nn.Module):
@@ -29,13 +113,22 @@ class class_loss_function(nn.Module):
         # self.ce_loss = nn.MultiLabelMarginLoss()
 
     def forward(self, y_true, y_pred, valid_mask):
-        # y_true = torch.squeeze(y_true, 1).long()
-        # y_true = torch.squeeze(y_true, 1)
-        # y_pred = torch.squeeze(y_pred, 1)
+        # Ensure predictions are in [0,1] range using sigmoid
+        y_pred = torch.sigmoid(y_pred)
+        
         bs = y_true.shape[0]
         if bs != 1:
-            y_pred = y_pred[valid_mask == 1]
-            y_true = y_true[valid_mask == 1]
+            # Only select valid samples based on mask
+            valid_indices = (valid_mask == 1)
+            if valid_indices.sum() > 0:  # Check if there are any valid samples
+                y_pred = y_pred[valid_indices]
+                y_true = y_true[valid_indices]
+            else:
+                return torch.tensor(0.0).to(y_pred.device)
+        
+        # Additional safety check to ensure values are in [0,1]
+        y_pred = torch.clamp(y_pred, 0.0, 1.0)
+        
         if len(y_pred) > 0:
             return self.ce_loss(y_pred, y_true)
         else:

@@ -29,6 +29,9 @@ def parse_args():
         parser.add_argument('--gpu_arch', default=['tesla', 'quadro', 'rtx'],
                             nargs='*', help='additional options to update config')
         parser.add_argument('--num_cpus', type=int, default=8, help='num cpus for cluster')
+        parser.add_argument('--model_type', type=str, choices=['deco', 'dinoContact'], default='deco', help='model type')
+        parser.add_argument('--encoder', type=str, choices=['swin', 'hrnet', 'dinov2'], default='dinov2', help='encoder type')
+        parser.add_argument('--classifier_type', type=str, choices=['shared', 'independent'], default='shared', help='classifier type')
         return parser
 
     # For Blender main parser

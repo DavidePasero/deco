@@ -17,3 +17,16 @@ train/__pycache__/
 utils/__pycache__/
 vis/__pycache__/visualize.cpython-39.pyc
 __pycache__/
+
+runs/
+lora_deco_dino_backbone_1_enc/
+dinoContact_out/
+dino-contact_results/
+dino-contact-for-real_results/
+deco_dino_backbone_outputs/
+deco_dino_backbone_results/
+deco_baseline_out/
+DECO_2_enc_DINO_BCKBN_FINETUNE_results/
+challenges/
+*_out/
+*_results/

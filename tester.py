@@ -5,11 +5,18 @@ from loguru import logger
 from train.trainer_step import TrainStepper
 from train.base_trainer import evaluator
 from data.base_dataset import BaseDataset
-from models.deco import DECO
+from models.deco import DECO, DINOContact
 from utils.config import parse_args, run_grid_search_experiments
 
 def test(hparams):
-    deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device)
+    if hparams.TRAINING.MODEL_TYPE == 'deco':
+        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device,
+                          hparams.TRAINING.CLASSIFIER_TYPE)
+    elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
+        deco_model = DINOContact(device)
+    else:
+        raise ValueError('Model type not supported')
+
     pytorch_total_params = sum(p.numel() for p in deco_model.parameters() if p.requires_grad)
     print('Total number of trainable parameters: ', pytorch_total_params)
 
@@ -17,7 +24,7 @@ def test(hparams):
 
     logger.info(f'Loading weights from {hparams.TRAINING.BEST_MODEL_PATH}')
     _, _ = solver.load(hparams.TRAINING.BEST_MODEL_PATH)
-    
+
     # Run testing
     for test_loader in val_loaders:
         dataset_name = test_loader.dataset.dataset

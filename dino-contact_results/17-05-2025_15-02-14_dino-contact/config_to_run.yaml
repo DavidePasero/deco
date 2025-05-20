@@ -1,0 +1,39 @@
+CONDOR_DIR: ''
+DATASET:
+  BATCH_SIZE: 8
+  NORMALIZE_IMAGES: true
+  NUM_WORKERS: 8
+EXP_NAME: dino-contact
+LOGDIR: dino-contact_results/17-05-2025_15-02-14_dino-contact
+OPTIMIZER:
+  LR: 1.0e-05
+  NUM_UPDATE_LR: 30
+  TYPE: adam
+OUTPUT_DIR: dino-contact_results
+PROJECT_NAME: DECO_demo_training
+TRAINING:
+  BEST_MODEL_PATH: ./checkpoints/Other_Checkpoints/dino-contact_best.pth
+  CHECKPOINT_EPOCHS: 20
+  CLASSIFIER_TYPE: shared
+  CONTEXT: true
+  DATASETS:
+  - damon
+  DATASET_MIX_PDF:
+  - '1.0'
+  DATASET_ROOT_PATH: ''
+  ENCODER: hrnet
+  LOSS_WEIGHTS: 1.0
+  MODEL_TYPE: deco
+  NUM_EARLY_STOP: 50
+  NUM_ENCODER: 2
+  NUM_EPOCHS: 100
+  PAL_LOSS_WEIGHTS: 0.01
+  SEMANTIC_CLASSIFIER: true
+  SHARED_SEMANTIC_CLASSIFIER: true
+  SUMMARY_STEPS: 5
+  TRAIN_BACKBONE: true
+VALIDATION:
+  DATASETS:
+  - damon
+  MAIN_DATASET: damon
+  SUMMARY_STEPS: 5
