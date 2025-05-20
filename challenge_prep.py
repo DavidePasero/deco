@@ -44,9 +44,15 @@ else:
 
 def initiate_model(args):
     if args.model_type == 'deco':
-        deco_model = DECO(args.encoder,  context=True, device=args.device,
-                          classifier_type=args.classifier_type,
-                          num_encoders=args.num_encoder)  # set up DinoContact here
+        print (args.train_backbone)
+        deco_model = DECO(
+            args.encoder,
+            context=args.context,
+            device=args.device,
+            classifier_type=args.classifier_type,
+            num_encoders=args.num_encoder,
+            train_backbone=args.train_backbone,
+            )  # set up DinoContact here
     elif args.model_type ==  'dinoContact':
         deco_model = DINOContact(args.device)
     else:
@@ -96,7 +102,10 @@ def main(args):
         img = img[np.newaxis, :, :, :]
         img = torch.tensor(img, dtype=torch.float32).to(device)
 
-        cont, sem_cont = deco_model(img)
+        if args.context:
+            cont, _, _, sem_cont = deco_model(img)
+        else:
+            cont, sem_cont = deco_model(img)
         cont = cont.detach().cpu().numpy().squeeze()
 
         # Get contact vertices
@@ -151,6 +160,8 @@ if __name__ == '__main__':
                         default='shared', type=str)
     parser.add_argument('--device', help='Device to use (cuda or cpu)',
                         default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+    parser.add_argument('--train-backbone', action='store_true')
+    parser.add_argument('--context', action='store_true')
 
     args = parser.parse_args()
     main(args)

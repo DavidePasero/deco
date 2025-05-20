@@ -40,7 +40,7 @@ class TrainStepper():
         if deco_model.__class__.__name__ == 'DINOContact':  # Check if we are using simply DINOContact
             self.optimizer_contact = torch.optim.Adam(
                 params=list(self.model.classifier.parameters()) +
-                       (list(self.model.encoder.parameters()) if self.model.train_backbone else []),
+                       [p for p in self.model.encoder.parameters() if p.requires_grad],
                 lr=learning_rate,
                 weight_decay=0.0001)
         elif deco_model.__class__.__name__ == 'DECO':
@@ -49,21 +49,21 @@ class TrainStepper():
                     self.optimizer_sem = torch.optim.Adam(
                         params=list(self.model.scene_projector.parameters()) +
                                list(self.model.decoder_sem.parameters()) +
-                               (list(self.model.encoder.parameters()) if self.model.train_backbone else []),
+                               [p for p in self.model.encoder.parameters() if p.requires_grad],
                         lr=learning_rate, weight_decay=0.0001)
                     self.optimizer_part = torch.optim.Adam(
                         params=list(self.model.decoder_part.parameters()) +
                                list(self.model.contact_projector.parameters()) +
-                               (list(self.model.encoder.parameters()) if self.model.train_backbone else []),
+                               [p for p in self.model.encoder.parameters() if p.requires_grad],
                         lr=learning_rate,
                         weight_decay=0.0001)
                 else:
                     self.optimizer_sem = torch.optim.Adam(
-                        params=list(self.model.encoder_sem.parameters()) + list(self.model.decoder_sem.parameters()) +
+                        params=[p for p in self.model.encoder_sem.parameters() if p.requires_grad] + list(self.model.decoder_sem.parameters()) +
                                (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                         lr=learning_rate, weight_decay=0.0001)
                     self.optimizer_part = torch.optim.Adam(
-                        params=list(self.model.encoder_part.parameters()) + list(self.model.decoder_part.parameters()) +
+                        params=[p for p in self.model.encoder_part.parameters() if p.requires_grad] + list(self.model.decoder_part.parameters()) +
                         (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
                         lr=learning_rate,
                         weight_decay=0.0001)
@@ -271,15 +271,12 @@ class TrainStepper():
         semantic_contact_labels = batch['semantic_contact'].to(self.device)
         has_semantic_contact = batch['has_semantic_contact'].to(self.device)
 
-        vlm_feats = batch.get('vlm_features')
-        vlm_feats = vlm_feats.to(self.device) if vlm_feats is not None else None
-
         # Forward pass
         initial_time = time.time()
         if self.context:
-            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img, vlm_feats)
+            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img)
         else:
-            cont, semantic_logits = self.model(img, vlm_feats)
+            cont, semantic_logits = self.model(img)
         time_taken = time.time() - initial_time
 
         if self.context:
@@ -386,17 +383,15 @@ class TrainStepper():
             },
                 model_path)
 
-    def load(self, model_path, load_optims: bool = True):
+    def load(self, model_path):
         print(f'~~~ Loading existing checkpoint from {model_path} ~~~')
         checkpoint = torch.load(model_path, weights_only=False)
-        key = "deco" if self.model.__class__.__name__ == "DECO" else "dinocontact"
-        self.model.load_state_dict(checkpoint[key], strict=True)
+        self.model.load_state_dict(checkpoint['deco'], strict=True)
 
-        if load_optims:
-            if self.context:
-                self.optimizer_sem.load_state_dict(checkpoint['sem_optim'])
-                self.optimizer_part.load_state_dict(checkpoint['part_optim'])
-            self.optimizer_contact.load_state_dict(checkpoint['contact_optim'])
+        if self.context:
+            self.optimizer_sem.load_state_dict(checkpoint['sem_optim'])
+            self.optimizer_part.load_state_dict(checkpoint['part_optim'])
+        self.optimizer_contact.load_state_dict(checkpoint['contact_optim'])
         epoch = checkpoint['epoch']
         f1 = checkpoint['f1']
         return epoch, f1

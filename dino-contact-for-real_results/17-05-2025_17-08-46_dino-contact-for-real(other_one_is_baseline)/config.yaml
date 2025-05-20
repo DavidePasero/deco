@@ -1,15 +1,15 @@
-EXP_NAME: 'dinoContact_results'
-PROJECT_NAME: 'DECO_DAMON_Testing'
-OUTPUT_DIR: 'deco_results'
+EXP_NAME: 'dino-contact-for-real(other_one_is_baseline)'
+PROJECT_NAME: 'DECO_demo_training'
+OUTPUT_DIR: 'dino-contact-for-real_results'
 CONDOR_DIR: ''
 DATASET:
-  BATCH_SIZE: 16
-  NUM_WORKERS: 4
+  BATCH_SIZE: 32
+  NUM_WORKERS: 8
   NORMALIZE_IMAGES: [True]
 OPTIMIZER:
   TYPE: 'adam'
-  LR: [5e-5]
-  NUM_UPDATE_LR: 3
+  LR: [1e-5]
+  NUM_UPDATE_LR: 30
 TRAINING:
   ENCODER: 'dinov2-giant'
   NUM_ENCODER: 2
@@ -18,17 +18,18 @@ TRAINING:
   NUM_EPOCHS: 100
   NUM_EARLY_STOP: 50
   SUMMARY_STEPS: 5
-  CHECKPOINT_EPOCHS: 20
+  CHECKPOINT_EPOCHS: 50
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/dino-contact-for-real(other_one_is_baseline)_best.pth'
-  PAL_LOSS_WEIGHTS: 0.0
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/dinoContact.pth'
+  LOSS_WEIGHTS: 1.
+  PAL_LOSS_WEIGHTS: 0.01
   SEMANTIC_CLASSIFIER: True
   SHARED_SEMANTIC_CLASSIFIER: True
   CLASSIFIER_TYPE: "shared"
   TRAIN_BACKBONE: False #only for DINO backbone
 VALIDATION:
-  SUMMARY_STEPS: 1000
+  SUMMARY_STEPS: 5
   DATASETS: ['damon']
   MAIN_DATASET: 'damon'

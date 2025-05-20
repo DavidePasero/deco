@@ -31,7 +31,7 @@ class MultiClassContactLoss(nn.Module):
         num_classes: int = 70,
         contact_weight: float = 1.0,
         class_weight: float   = 0.5,
-        dist_weight: float    = 0.01,           # much smaller now
+        dist_weight: float    = 0.08,           
         pos_weight: float     = None            # computed from data if not provided
     ):
         super().__init__()
