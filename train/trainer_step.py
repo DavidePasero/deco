@@ -23,7 +23,7 @@ class TrainStepper():
         self.lr = learning_rate
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
-        self.semantic_contact_loss = MultiClassContactLoss(pos_weight=6.451).to(device)
+        self.semantic_contact_loss = MultiClassContactLoss().to(device)
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -36,60 +36,29 @@ class TrainStepper():
                 self.writer.add_scalar(f"{mode}/{key}", value, step)
 
     def _setup_optims(self, deco_model: torch.nn.Module, learning_rate: float):
-
-        if deco_model.__class__.__name__ == 'DINOContact':  # Check if we are using simply DINOContact
+        # DINOContact: single encoder + classifier
+        if deco_model.__class__.__name__ == 'DINOContact':
             self.optimizer_contact = torch.optim.Adam(
-                params=list(self.model.classifier.parameters()) +
-                       [p for p in self.model.encoder.parameters() if p.requires_grad],
+                params=[p for p in self.model.encoder.parameters() if p.requires_grad]
+                       + list(self.model.classifier.parameters()),
                 lr=learning_rate,
                 weight_decay=0.0001)
+            return
         elif deco_model.__class__.__name__ == 'DECO':
-            if self.context:
-                if "dinov2" in self.model.encoder_type and self.model.num_encoder == 1:
-                    self.optimizer_sem = torch.optim.Adam(
-                        params=list(self.model.scene_projector.parameters()) +
-                               list(self.model.decoder_sem.parameters()) +
-                               [p for p in self.model.encoder.parameters() if p.requires_grad],
-                        lr=learning_rate, weight_decay=0.0001)
-                    self.optimizer_part = torch.optim.Adam(
-                        params=list(self.model.decoder_part.parameters()) +
-                               list(self.model.contact_projector.parameters()) +
-                               [p for p in self.model.encoder.parameters() if p.requires_grad],
-                        lr=learning_rate,
-                        weight_decay=0.0001)
-                else:
-                    self.optimizer_sem = torch.optim.Adam(
-                        params=[p for p in self.model.encoder_sem.parameters() if p.requires_grad] + list(self.model.decoder_sem.parameters()) +
-                               (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
-                        lr=learning_rate, weight_decay=0.0001)
-                    self.optimizer_part = torch.optim.Adam(
-                        params=[p for p in self.model.encoder_part.parameters() if p.requires_grad] + list(self.model.decoder_part.parameters()) +
-                        (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []),
-                        lr=learning_rate,
-                        weight_decay=0.0001)
-
-            if "dinov2" in self.model.encoder_type:  # Check if DECO has DINO encoder, if so we need to use the feature projectors in the optimizer
-                self.optimizer_contact = torch.optim.Adam(
-                    params=list(self.model.scene_projector.parameters()) + list(
-                        self.model.contact_projector.parameters()) + list(
-                        self.model.cross_att.parameters()) + list(self.model.classif.parameters()) + (list(
-                        self.model.encoder.parameters()) if self.model.train_backbone else []) +
-                        (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv") else []) +
-                           self.model._get_vlm_params(),
-                    lr=learning_rate,
-                    weight_decay=0.0001)
-            else:
-                self.optimizer_contact = torch.optim.Adam(
-                    params=list(self.model.encoder_sem.parameters()) + list(
-                        self.model.encoder_part.parameters()) + list(
-                        self.model.cross_att.parameters()) + list(self.model.classif.parameters())+
-                           (list(self.model.correction_conv.parameters()) if hasattr(self.model, "correction_conv")
-                            else []) +
-                           self.model._get_vlm_params(),
-                    lr=learning_rate,
-                    weight_decay=0.0001)
-
+            self.optimizer_sem = torch.optim.Adam(
+                params=self.model.get_encoder_params() + self.model.get_semantic_branch_params(),
+                lr=learning_rate,
+                weight_decay=0.0001)
+            self.optimizer_part = torch.optim.Adam(
+                params=self.model.get_encoder_params() + self.model.get_part_branch_params(),
+                lr=learning_rate,
+                weight_decay=0.0001)
+            self.optimizer_contact = torch.optim.Adam(
+                params=self.model.get_encoder_params() + self.model.get_contact_branch_params(),
+                lr=learning_rate,
+                weight_decay=0.0001)
         else:
+            # Unsupported model
             raise NotImplementedError(f"The model {deco_model.__class__.__name__} is not supported")
 
     def optimize(self, batch):

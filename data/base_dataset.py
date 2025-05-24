@@ -142,6 +142,34 @@ class BaseDataset(Dataset):
             # Replace underscores with spaces for better semantic matching
             class_names = [name.replace('_', ' ') for name in self.object_classes]
             self.object_embeddings = model.encode(class_names, convert_to_tensor=True)
+        
+    def compute_pos_weight (self):
+        """
+        Compute positive weights for vertices based on effective number of samples
+        This is used to balance the loss function during training.
+        The weights are computed based on the number of times each vertex appears in the contact labels.
+        """
+        # Compute effective-number pos weights per vertex (Cui et al., CVPR'19)
+        beta = 0.99
+        # Initialize positive counts for each vertex
+        pos_counts = np.zeros(self.n_vertices, dtype=np.float64)
+        # Count appearances of each vertex in contact_labels_3d if available
+        if self.has_contact_3d.sum() > 0:
+            pos_counts = np.sum (self.contact_labels_3d, axis=0)
+        # Compute effective number for each vertex
+        eff_num = (1.0 - np.power(beta, pos_counts)) / (1.0 - beta)
+        # Compute weights and normalize to mean=1
+        pos_weights = 1.0 / (eff_num + 1e-8)
+        pos_weights = pos_weights / np.mean(pos_weights) * 6.451
+        # Store as a torch tensor for loss usage, scaled by the inverse frequency of positive vertices.
+        # (On average there are 6.451 times more negative vertices than positive ones)
+        pos_weights = torch.from_numpy(pos_weights.astype(np.float32))
+        pos_weights = torch.clamp(
+            pos_weights,
+            max=torch.mean(pos_weights) + 1.5 * torch.std(pos_weights))
+        # Save locally pos_weight for later use
+        torch.save(pos_weights, 'pos_weights_damon.pt')
+        return pos_weights
 
         if self.use_vlm:
                 self.vlm_manager = VLMManager()

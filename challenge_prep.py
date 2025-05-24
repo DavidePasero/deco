@@ -109,9 +109,7 @@ def main(args):
         cont = cont.detach().cpu().numpy().squeeze()
 
         # Get contact vertices
-        sem_cont_filtered = sem_cont[..., [cont > 0.5][0]]
-
-        sem_cont_per_vid = torch.argmax(sem_cont_filtered, dim=1).squeeze()
+        sem_cont_per_vid = torch.argmax(sem_cont, dim=1).squeeze()
 
         cont_smpl = []
         for indx, i in enumerate(cont):
@@ -120,10 +118,12 @@ def main(args):
             else:
                 cont_smpl.append(0)
 
+        vertex_mask = [cont > 0.5]
         cont_sem_chl = {}
         for obj_name in pred_obj_classes:
             obj_idx = rev_obj_mapping[obj_name]
-            cont_sem_chl[obj_name] = torch.where(sem_cont_per_vid == obj_idx)[0].tolist()
+            object_mask = sem_cont_per_vid == obj_idx
+            cont_sem_chl[obj_name] = torch.where((object_mask & torch.tensor(vertex_mask).cuda()))[1].tolist()
 
 
         challenge_data[img_name.split("./")[1]] = {"gen_contact_vids": cont, "sem_contact_vids": cont_sem_chl}

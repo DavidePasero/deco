@@ -84,7 +84,6 @@ class DECO(nn.Module):
         self.encoder_type = encoder
         self.context = context
         self.classifier_type = classifier_type
-        self.num_encoders = num_encoders
         self.train_backbone = train_backbone
         self.use_vlm = use_vlm
 
@@ -119,10 +118,10 @@ class DECO(nn.Module):
                 self.semantic_classif = SemanticClassifier(1024).to(device)
 
         elif "dinov2" in self.encoder_type:
-            self.num_encoder = num_encoders
+            self.num_encoders = num_encoders
             hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type]
 
-            if self.num_encoder > 1:
+            if self.num_encoders > 1:
                 self.encoder_sem = Encoder(encoder=self.encoder_type).to(device)
                 self.encoder_part = Encoder(encoder=self.encoder_type).to(device)
             else:
@@ -131,7 +130,7 @@ class DECO(nn.Module):
                 self.contact_projector = nn.Linear(hidden_dim, 1024).to(device)
 
             # Freeze DINOv2 backbone parameters
-            if self.num_encoder > 1:
+            if self.num_encoders > 1:
                 for p in self.encoder_sem.parameters():
                     p.requires_grad = False
                 for p in self.encoder_part.parameters():
@@ -167,7 +166,7 @@ class DECO(nn.Module):
                         "attention.output.dense"
                     ]
                 )
-                if self.num_encoder > 1:
+                if self.num_encoders > 1:
                     # wrap both encoders with LoRA
                     self.encoder_sem = get_peft_model(self.encoder_sem, lora_cfg)
                     self.encoder_part = get_peft_model(self.encoder_part, lora_cfg)
@@ -194,14 +193,50 @@ class DECO(nn.Module):
 
         self.device = device
 
-    def _get_vlm_params(self) -> list:
-        if not self.use_vlm:
-            return []
+    def get_encoder_params(self):
+        """
+        Returns a list of encoder parameters that require gradients.
+        Handles both single-encoder and two-encoder setups.
+        """
+        if self.num_encoders == 1:
+            return [p for p in self.encoder.parameters() if p.requires_grad]
+        else:
+            return ([p for p in self.encoder_sem.parameters() if p.requires_grad] +
+                    [p for p in self.encoder_part.parameters() if p.requires_grad])
 
-        return (list(self.text_projector.parameters()) + list(self.cross_att_text.parameters()) +
-                list(self.tf_agg.parameters())) if isinstance(self.tf_agg, torch.nn.Module) else []
+    def get_semantic_branch_params(self):
+        """
+        Returns parameters for the semantic segmentation head:
+        scene_projector (if present), decoder_sem (if context), and correction_conv.
+        """
+        params = []
+        if self.context:
+            if self.num_encoders == 1:
+                params += list(self.scene_projector.parameters())
+            params += list(self.decoder_sem.parameters())
+            params += list(self.correction_conv.parameters())
+        return params
 
-    def forward(self, img, vlm_feats = None):
+    def get_part_branch_params(self):
+        """
+        Returns parameters for the part segmentation head:
+        contact_projector (if present), decoder_part (if context), and correction_conv.
+        """
+        params = []
+        if self.context:
+            if self.num_encoders == 1:
+                params += list(self.contact_projector.parameters())
+            params += list(self.decoder_part.parameters())
+            params += list(self.correction_conv.parameters())
+        return params
+
+    def get_contact_branch_params(self):
+        """
+        Returns parameters for the contact head: cross-attention, classifier, and correction_conv.
+        """
+        return list(self.cross_att.parameters()) + list(self.classif.parameters()) + list(self.semantic_classif.parameters())
+
+    def forward(self, img):
         if self.encoder_type == 'hrnet':
             sem_enc_out = self.encoder_sem(img)
             part_enc_out = self.encoder_part(img)
