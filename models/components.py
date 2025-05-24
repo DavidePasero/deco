@@ -140,21 +140,21 @@ class Decoder(nn.Module):
 
 
 class Classifier(nn.Module):
-    def __init__(self, in_dim, out_dim=6890):
+    def __init__(self, in_dim, num_vertices=6890):
         super(Classifier, self).__init__()
 
-        self.out_dim = out_dim
+        self.num_vertices = num_vertices
 
         self.classifier = nn.Sequential(
             nn.Linear(in_dim, 4096, True), 
             nn.ReLU(),
-            nn.Linear(4096, out_dim, True),
+            nn.Linear(4096, num_vertices, True),
             nn.Sigmoid()
         )
 
     def forward(self, x):
         out = self.classifier(x)
-        return out.reshape(-1, self.out_dim)
+        return out.reshape(-1, self.num_vertices)
 
 
 class SemanticClassifier(nn.Module):

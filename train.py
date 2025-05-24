@@ -41,9 +41,15 @@ def train(hparams):
             num_encoders=hparams.TRAINING.NUM_ENCODER,
             classifier_type=hparams.TRAINING.CLASSIFIER_TYPE,
             train_backbone=hparams.TRAINING.TRAIN_BACKBONE,
+            num_vertices=6890,
+            use_object_classifier=hparams.TRAINING.OBJECT_CLASSIFIER,
             ) # set up DinoContact here
     elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
-        deco_model = DINOContact(device, train_backbone=hparams.TRAINING.TRAIN_BACKBONE)
+        deco_model = DINOContact(
+            device,
+            train_backbone=hparams.TRAINING.TRAIN_BACKBONE,
+            num_vertices=6890,
+            use_object_classifier=hparams.TRAINING.OBJECT_CLASSIFIER,)
     else:
         raise ValueError('Model type not supported')
 
@@ -51,7 +57,7 @@ def train(hparams):
         hparams.TRAINING.CONTEXT = False
 
     solver = TrainStepper(deco_model, hparams.TRAINING.CONTEXT, hparams.OPTIMIZER.LR, hparams.TRAINING.LOSS_WEIGHTS,
-                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, run_name=_create_run_name(hparams))
+                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, run_name=_create_run_name(hparams), use_object_clssifier=hparams.TRAINING.OBJECT_CLASSIFIER)
 
     vb_f1 = 0
     start_ep = 0

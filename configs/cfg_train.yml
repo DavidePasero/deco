@@ -1,6 +1,6 @@
-EXP_NAME: 'deco-vlm'
+EXP_NAME: 'test'
 PROJECT_NAME: 'DECO_demo_training'
-OUTPUT_DIR: 'dino-contact_results'
+OUTPUT_DIR: 'test_results'
 CONDOR_DIR: ''
 DATASET:
   BATCH_SIZE: 8
@@ -11,7 +11,7 @@ OPTIMIZER:
   LR: [1e-5]
   NUM_UPDATE_LR: 30
 TRAINING:
-  ENCODER: 'hrnet'
+  ENCODER: 'dinov2-large'
   NUM_ENCODER: 2
   MODEL_TYPE: "deco"
   CONTEXT: [True]
@@ -19,17 +19,16 @@ TRAINING:
   NUM_EARLY_STOP: 50
   SUMMARY_STEPS: 5
   CHECKPOINT_EPOCHS: 20
-  DATASETS: ['damon']
-  DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
+  DATASETS: ['damon', 'rich']
+  DATASET_MIX_PDF: ['0.5', '0.5'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/hr-net_vlm.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/test.pth'
   LOSS_WEIGHTS: 1.
   PAL_LOSS_WEIGHTS: 0.01
-  SEMANTIC_CLASSIFIER: True
-  SHARED_SEMANTIC_CLASSIFIER: True
+  OBJECT_CLASSIFIER: False
   CLASSIFIER_TYPE: "shared"
   TRAIN_BACKBONE: False #only for DINO backbone
-  USE_VLM: True
+  USE_VLM: False
 VALIDATION:
   SUMMARY_STEPS: 5
   DATASETS: ['damon']

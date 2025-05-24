@@ -217,6 +217,4 @@ def extract_cam_param_xml(xml_path: str = '', dtype=float):
 
     return focal_length_x, focal_length_y, center, rotation, translation, cam_center, k1, k2
 
-rich_extract(img_dataset_path='/is/cluster/work/achatterjee/rich', out_path='/is/cluster/work/achatterjee/rich/npzs', split='train')
-rich_extract(img_dataset_path='/is/cluster/work/achatterjee/rich', out_path='/is/cluster/work/achatterjee/rich/npzs', split='val')
-rich_extract(img_dataset_path='/is/cluster/work/achatterjee/rich', out_path='/is/cluster/work/achatterjee/rich/npzs', split='test')
+rich_extract(img_dataset_path='RICH/', out_path='datasets/Release_Datasets/RICH/', split='train')

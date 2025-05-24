@@ -11,6 +11,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": ["--cfg", "configs/cfg_train.yml"]
+            //"args": ["--contact_npz", "datasets/Release_Datasets/damon/hot_dca_trainval.npz", "--input_type", "smpl"]
         }
     ]
 }

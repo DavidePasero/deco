@@ -11,6 +11,8 @@ import logging
 
 from models.vlm import VLMManager
 from models.utils import pad_and_stack
+from pathlib import Path
+import torchvision.transforms as T
 
 
 # Setup logging
@@ -46,19 +48,45 @@ def mask_split(img, num_parts):
         mask[:, :, i] = np.where(img == i, 1., 0.)
     return np.transpose(mask, (2, 0, 1))
 
+class TripleTransformation:
+    def __init__ (self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, img, mask_scene, mask_parts):
+        pass
+
 class BaseDataset(Dataset):
 
-    def __init__(self, dataset, mode, model_type='smpl', normalize=False, use_vlm: bool = True):
+    def __init__(self, dataset, mode, model_type='smpl', normalize=False, use_vlm: bool = False):
         self.dataset = dataset
         self.mode = mode
         self.use_vlm = use_vlm
 
         print(f'Loading dataset: {constants.DATASET_FILES[mode][dataset]} for mode: {mode}')
 
+        # Load the full dataset arrays
         self.data = np.load(constants.DATASET_FILES[mode][dataset], allow_pickle=True)
+        all_imgnames = self.data['imgname']
 
+        # Manage rich_paths: store only image paths that actually exist on disk
+        if dataset == 'rich':
+            rich_paths_file = "rich_paths"
+            if os.path.exists(rich_paths_file):
+                with open(rich_paths_file, "r") as f:
+                    present_imgs = [line.strip() for line in f if line.strip()]
+
+            # Filter all arrays in self.data to only those with files on disk
+            present_set = set(present_imgs)
+            mask = np.array([img in present_set for img in all_imgnames])
+
+            # Rebuild self.data as a dict of filtered arrays
+            filtered = {k: self.data[k][mask] for k in self.data.files}
+            self.data = filtered
+
+        # Update the image list to only existing files
         self.images = self.data['imgname']
-
+        print ("Number of images in dataset: ", len(self.images))
+        
         # get 3d contact labels, if available
         try:
             self.contact_labels_3d = self.data['contact_label']
@@ -115,7 +143,24 @@ class BaseDataset(Dataset):
             raise NotImplementedError
 
         self.normalize = normalize
-        self.normalize_img = Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD)
+        self.transforms = T.Compose([
+            T.RandomApply(
+                T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                p=0.5
+            ),
+            T.RandomApply(
+                T.Grayscale(num_output_channels=3),
+                p=0.5
+            ),
+            T.RandomApply(
+                T.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+                p=0.5
+            ),
+        ])
+
+        if self.normalize:
+            # Normalize images to [0, 1] range
+            self.normalize_img = T.Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD),
 
         # Initialize object class embeddings cache
         self.object_classes = [
@@ -172,9 +217,9 @@ class BaseDataset(Dataset):
         return pos_weights
 
         if self.use_vlm:
-                self.vlm_manager = VLMManager()
-                if not self.vlm_manager.check_cache(self.images):
-                    self.vlm_manager.extract_from_paths(self.images)
+            self.vlm_manager = VLMManager()
+            if not self.vlm_manager.check_cache(self.images):
+                self.vlm_manager.extract_from_paths(self.images)
 
     def _map_object_to_coco_class(self, obj_name):
         """
@@ -311,9 +356,11 @@ class BaseDataset(Dataset):
             print('2D polygon contact: ', polygon_contact_2d_path)
 
         if self.normalize:
+            img = self.transforms(img)
             img = torch.tensor(img, dtype=torch.float32)
             item['img'] = self.normalize_img(img)
         else:
+            img = self.transforms(img)
             item['img'] = torch.tensor(img, dtype=torch.float32)
 
         if self.is_smplx[index]:

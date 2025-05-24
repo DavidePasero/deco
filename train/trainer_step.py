@@ -8,7 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 class TrainStepper():
     def __init__(self, deco_model, context, learning_rate, loss_weight, pal_loss_weight, device, log_dir="runs",
-                 run_name: str = ""):
+                 run_name: str = "", use_object_clssifier=False):
         self.device = device
         self.global_step = 0
         self.model = deco_model
@@ -97,7 +97,6 @@ class TrainStepper():
         # Forward pass
         if self.context:
             cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img, vlm_feats=vlm_feats)
-
         else:
             cont, semantic_logits = self.model(img, vlm_feats=batch.get('vlm_features').to(self.device))
 

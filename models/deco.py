@@ -21,54 +21,6 @@ DINOv2NAME_TO_HIDDEN_DIM = {
 
 SMOL_HIDDEN_DIM = 768  # hidden size of SmolVLM‑Base
 
-
-def shared_semantic_classifier(self, att, cont):
-    # Use SharedSemanticClassifier
-    batch_size = att.shape[0]
-    num_vertices = 6890
-    num_classes = self.semantic_classif.num_classes
-
-    # Initialize output tensor
-    semantic_cont = torch.zeros(batch_size, num_classes, num_vertices).to(self.device)
-
-    # Get contact vertices (where cont > threshold)
-    contact_mask = (cont > 0.5)
-
-    if contact_mask.sum() > 0:
-        # Process vertices with contact in parallel using torch.nn.utils.parametrize.cached
-        with torch.nn.utils.parametrize.cached():
-            for b in range(batch_size):
-                # Get vertices with contact for this batch item
-                batch_contacts = contact_mask[b].squeeze()
-
-                if batch_contacts.sum() > 0:
-                    # Get indices of contact vertices
-                    contact_vertices = batch_contacts.nonzero(as_tuple=True)[0]
-
-                    # Create position embeddings for all contact vertices at once
-                    vertex_positions = torch.arange(num_vertices).to(self.device)
-                    vertex_pos_embeddings = self.semantic_classif.pos_embedding(vertex_positions)
-
-                    # Get embeddings only for contact vertices
-                    contact_pos_embeddings = vertex_pos_embeddings[contact_vertices]
-
-                    # Repeat attention features for each contact vertex
-                    repeated_features = att[b].expand(len(contact_vertices), -1, -1)
-
-                    # Concatenate features with position embeddings
-                    combined_features = torch.cat([
-                        repeated_features.squeeze(1),
-                        contact_pos_embeddings
-                    ], dim=1)
-
-                    # Apply classifier to all vertices at once
-                    class_predictions = self.semantic_classif.feature_transform(combined_features)
-
-                    # Place predictions in output tensor
-                    semantic_cont[b, :, contact_vertices] = class_predictions.t()
-
-    return semantic_cont
-
 class DECO(nn.Module):
     def __init__(self,
                  encoder,
@@ -79,13 +31,18 @@ class DECO(nn.Module):
                  use_vlm: bool = False,
                  train_backbone: bool = False,
                  lora_r: int = 8,
-                 lora_alpha: int = 32,):
+                 lora_alpha: int = 32,
+                 num_vertices: int = 6890,
+                 use_object_classifier: bool = True):
         super(DECO, self).__init__()
         self.encoder_type = encoder
         self.context = context
         self.classifier_type = classifier_type
         self.train_backbone = train_backbone
         self.use_vlm = use_vlm
+        self.num_encoders = 2 # Adjusted later in case we use DINOv2 with one encoder
+        self.num_vertices = num_vertices
+        self.use_object_classifier = use_object_classifier
 
         if self.encoder_type == 'hrnet':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
@@ -98,10 +55,10 @@ class DECO(nn.Module):
             self.cross_att = Cross_Att(480, 480).to(device)
             self.classif = Classifier(480).to(device)
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(480).to(device)
+                self.semantic_classif = SharedSemanticClassifier(480, num_vertices=self.num_vertices).to(device)
             else:
                 # Add semantic classifier with correct input dimension for hrnet
-                self.semantic_classif = SemanticClassifier(480).to(device)
+                self.semantic_classif = SemanticClassifier(480, num_vertices=self.num_vertices).to(device)
         elif self.encoder_type == 'swin':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
             self.encoder_part = Encoder(encoder=encoder).to(device)
@@ -110,12 +67,12 @@ class DECO(nn.Module):
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
             self.cross_att = Cross_Att(1024, 1024).to(device)
-            self.classif = Classifier(1024).to(device)
+            self.classif = Classifier(1024, num_vertices=self.num_vertices).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
+                self.semantic_classif = SharedSemanticClassifier(1024, num_vertices=self.num_vertices).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(1024).to(device)
+                self.semantic_classif = SemanticClassifier(1024, num_vertices=self.num_vertices).to(device)
 
         elif "dinov2" in self.encoder_type:
             self.num_encoders = num_encoders
@@ -146,12 +103,12 @@ class DECO(nn.Module):
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
 
             self.cross_att = Cross_Att(1024, 1024).to(device)
-            self.classif = Classifier(1024).to(device)
+            self.classif = Classifier(1024, num_vertices=self.num_vertices).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
+                self.semantic_classif = SharedSemanticClassifier(1024, num_vertices=self.num_vertices).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(1024).to(device)
+                self.semantic_classif = SemanticClassifier(1024, num_vertices=self.num_vertices).to(device)
 
             # ---- LoRA adaptation on DINOv2 backbone ----
             if self.train_backbone and 'dinov2' in self.encoder_type:
@@ -234,7 +191,9 @@ class DECO(nn.Module):
         """
         Returns parameters for the contact head: cross-attention, classifier, and correction_conv.
         """
-        return list(self.cross_att.parameters()) + list(self.classif.parameters()) + list(self.semantic_classif.parameters())
+        params = []
+        params += list(self.cross_att.parameters()) + list(self.classif.parameters())
+        return params + list(self.semantic_classif.parameters()) if self.use_object_classifier else params
 
     def forward(self, img):
         if self.encoder_type == 'hrnet':
@@ -297,22 +256,9 @@ class DECO(nn.Module):
             att = self.cross_att(sem_enc_out, part_enc_out)
             cont = self.classif(att)
 
-        if self.classifier_type == 'shared':
-            # ------------------------------------------------------------------
-            # Vectorised semantic‑contact prediction without per‑sample loops.
-            #
-            #   att   : [B, 1, F]   (global image features)
-            #   cont  : [B, 1, 6 890]  (contact logits – not probabilities!)
-            #
-            # Strategy:
-            #   • Run the shared classifier on *all* vertices in parallel
-            #     → logits_all : [B, C, 6890]
-            # ------------------------------------------------------------------
-            feats = att.squeeze(1)  # [B, F]
-            logits_all = self.semantic_classif(feats)  # [B, C, 6890]
-        else: #TODO implement correctly
-            # Semantic contact prediction with the separate (non‑shared) classifier
-            semantic_cont = self.semantic_classif(att)
+        logits_all = None
+        if self.use_object_classifier:
+            logits_all = self.semantic_classif(att)  # [B, C, 6890]
 
         if self.context:
             return cont, sem_mask_pred, part_mask_pred, logits_all
@@ -397,6 +343,8 @@ class DINOContact(nn.Module):
     def __init__(self, device: str = "cuda", encoder_name: str = "dinov2-large",
                  classifier_type: str = "shared", train_backbone: bool = False,
                  train_last: int = -1,
+                 num_vertices: int = 6890,
+                 use_object_classifier: bool = False,
                  *args, **kwargs):
         super(DINOContact, self).__init__()
         self.device = device
@@ -408,6 +356,8 @@ class DINOContact(nn.Module):
         self.encoder = Encoder(encoder=encoder_name)
         hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[encoder_name]
         layers_to_train = [str(x) for x in range(self.num_enc_layers - train_last, self.num_enc_layers)]
+        self.num_vertices=num_vertices
+        self.use_object_classifier = use_object_classifier
         """
         for name, mod in self.encoder.named_parameters(): #VODOO
             if set(layers_to_train).intersection(set(name.split("."))):
@@ -415,8 +365,9 @@ class DINOContact(nn.Module):
             else:
                 mod.requires_grad = False
         """
-        self.classifier = Classifier(hidden_dim).to(device)
-        self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device) if classifier_type == "shared" else None
+        self.classifier = Classifier(hidden_dim, num_vertices=self.num_vertices).to(device)
+        if self.use_object_classifier:
+            self.semantic_classif = SharedSemanticClassifier(hidden_dim, num_vertices=self.num_vertices).to(device) if classifier_type == "shared" else None
         self.train_backbone = train_backbone
 
     def forward(self, x):
@@ -428,7 +379,7 @@ class DINOContact(nn.Module):
 
         cont = self.classifier(features)
 
-        if self.semantic_classif is not None:
+        if self.use_object_classifier is not None:
             feats = features.squeeze(1)  # [B, F]
             logits_all = self.semantic_classif(feats)  # [B, C, 6890]
             return cont, logits_all

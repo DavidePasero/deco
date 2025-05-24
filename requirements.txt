@@ -18,3 +18,5 @@ charset-normalizer==3.1.0
 tensorboard
 sentence-transformers>=2.2.2
 peft
+spacepy
+h5py

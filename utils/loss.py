@@ -31,13 +31,15 @@ class MultiClassContactLoss(nn.Module):
         num_classes: int = 70,
         contact_weight: float = 1.0,
         class_weight: float   = 0.5,
-        dist_weight: float    = 0.08,           
+        dist_weight: float    = 0.08,
+        use_object_classifier: bool = False    
     ):
         super().__init__()
         self.num_classes   = num_classes
         self.contact_w     = contact_weight
         self.class_w       = class_weight
         self.dist_w        = dist_weight
+        self.use_object_classifier = use_object_classifier
 
         # Load per-vertex effective-number pos weights
         pos_weight_arr = torch.load("pos_weights_damon.pt").float()
@@ -66,23 +68,27 @@ class MultiClassContactLoss(nn.Module):
         # ---------------------------------------------------------------- #
         # 1) Binary "any-contact" head  (soft OR over classes)
         # ---------------------------------------------------------------- #
-        # logit_any = log( Σ_i exp(logit_i) )   (soft maximum)
-        target_any_contact = target.any(dim=1).float()            # [B, V] in {0,1}
+        if self.use_object_classifier:
+            # logit_any = log( Σ_i exp(logit_i) )   (soft maximum)
+            target_any_contact = target.any(dim=1).float()            # [B, V] in {0,1}
 
-        binary_loss = self.bce_contact(cont_pred, target_any_contact)
+            binary_loss = self.bce_contact(cont_pred, target_any_contact)
+        else:
+            binary_loss = self.bce_contact(cont_pred, target)
 
         # ---------------------------------------------------------------- #
         # 2) Cross entropy loss – only on vertices that truly have contact
         # ---------------------------------------------------------------- #
-        contact_mask = target_any_contact.bool()                  # [B, V]
+        if self.use_object_classifier:
+            contact_mask = target_any_contact.bool()                  # [B, V]
 
-        if contact_mask.any():
-            # Expand mask to [B, C, V] for broadcasting                    # [B,1,V]
-            per_class_loss = self.ce_class(vertex_obj_pred, target)         # [B,C,V]
-            # keep only vertices where GT has contact
-            semantic_loss = (per_class_loss * contact_mask).sum() / contact_mask.sum()
-        else:
-            semantic_loss = vertex_obj_pred.new_tensor(0.0)
+            if contact_mask.any():
+                # Expand mask to [B, C, V] for broadcasting                    # [B,1,V]
+                per_class_loss = self.ce_class(vertex_obj_pred, target)         # [B,C,V]
+                # keep only vertices where GT has contact
+                semantic_loss = (per_class_loss * contact_mask).sum() / contact_mask.sum()
+            else:
+                semantic_loss = vertex_obj_pred.new_tensor(0.0)
 
         # ---------------------------------------------------------------- #
         # 3) Geodesic distance penalty (optional)
