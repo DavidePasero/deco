@@ -39,8 +39,14 @@ else:
 
 def initiate_model(args):
     if args.model_type == 'deco':
-        deco_model = DECO(args.encoder, args.context, args.device,
-                          args.classifier_type)  # set up DinoContact here
+        deco_model = DECO(
+            args.encoder,
+            context=args.context,
+            device=args.device,
+            classifier_type=args.classifier_type,
+            num_encoders=args.num_encoder,
+            train_backbone=args.train_backbone,
+            )   # set up DinoContact here
     elif args.model_type ==  'dinoContact':
         deco_model = DINOContact(args.device)
     else:
@@ -178,8 +184,8 @@ def main(args):
         img = img[np.newaxis,:,:,:]
         img = torch.tensor(img, dtype = torch.float32).to(device)
 
-        if args.model_type == 'dinoContact':
-            cont, semantic_logits = deco_model(img)
+        if args.context:
+            cont, _, _, semantic_logits = deco_model(img)
         else:
             cont, semantic_logits = deco_model(img)
         cont = cont.detach().cpu()                 # keep as Tensor
@@ -335,6 +341,9 @@ if __name__=='__main__':
                             default='shared', type=str)
         parser.add_argument('--device', help='Device to use (cuda or cpu)',
                             default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+        parser.add_argument('--num_encoder', help='Number of encoders',
+                            type=int, default=2)
+        parser.add_argument('--train-backbone', action='store_true')
 
         args = parser.parse_args()
         main(args)

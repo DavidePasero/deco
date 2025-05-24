@@ -138,8 +138,6 @@ class BaseDataset(Dataset):
             class_names = [name.replace('_', ' ') for name in self.object_classes]
             self.object_embeddings = model.encode(class_names, convert_to_tensor=True)
         
-        self.pos_weight = self.compute_pos_weight()
-
     def compute_pos_weight (self):
         """
         Compute positive weights for vertices based on effective number of samples
@@ -157,16 +155,16 @@ class BaseDataset(Dataset):
         eff_num = (1.0 - np.power(beta, pos_counts)) / (1.0 - beta)
         # Compute weights and normalize to mean=1
         pos_weights = 1.0 / (eff_num + 1e-8)
-        pos_weights = pos_weights / np.mean(pos_weights)
+        pos_weights = pos_weights / np.mean(pos_weights) * 6.451
         # Store as a torch tensor for loss usage, scaled by the inverse frequency of positive vertices.
         # (On average there are 6.451 times more negative vertices than positive ones)
-        pos_weight = torch.clamp(
-            torch.from_numpy(
-                pos_weights.astype(np.float32)),
-            max=torch.mean(pos_weight) + 1.5 * torch.std(pos_weight)) * 6.451
+        pos_weights = torch.from_numpy(pos_weights.astype(np.float32))
+        pos_weights = torch.clamp(
+            pos_weights,
+            max=torch.mean(pos_weights) + 1.5 * torch.std(pos_weights))
         # Save locally pos_weight for later use
-        torch.save(pos_weight, 'pos_weight_damon.pt')
-        return pos_weight
+        torch.save(pos_weights, 'pos_weights_damon.pt')
+        return pos_weights
 
     def _map_object_to_coco_class(self, obj_name):
         """

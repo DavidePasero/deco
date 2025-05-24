@@ -30,8 +30,14 @@ def train(hparams):
     if hparams.TRAINING.TRAIN_BACKBONE and "dino" in hparams.TRAINING.ENCODER:
         warnings.warn("Backbone will be trained. Make sure this behavior is wanted!")
     if hparams.TRAINING.MODEL_TYPE == 'deco':
-        deco_model = DECO(hparams.TRAINING.ENCODER, hparams.TRAINING.CONTEXT, device, hparams.TRAINING.CLASSIFIER_TYPE,
-                          train_backbone=hparams.TRAINING.TRAIN_BACKBONE) # set up DinoContact here
+        deco_model = DECO(
+            encoder=hparams.TRAINING.ENCODER,
+            context=hparams.TRAINING.CONTEXT,
+            device=device,
+            num_encoders=hparams.TRAINING.NUM_ENCODER,
+            classifier_type=hparams.TRAINING.CLASSIFIER_TYPE,
+            train_backbone=hparams.TRAINING.TRAIN_BACKBONE,
+            ) # set up DinoContact here
     elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
         deco_model = DINOContact(device, train_backbone=hparams.TRAINING.TRAIN_BACKBONE)
     else:
