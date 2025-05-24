@@ -19,8 +19,10 @@ vis/__pycache__/visualize.cpython-39.pyc
 __pycache__/
 
 runs/
-lora_deco_dino_backbone_1_enc/
-dinoContact_out/
+cache/
+
+*.pkl
+
 dino-contact_results/
 dino-contact-for-real_results/
 deco_dino_backbone_outputs/
@@ -32,3 +34,5 @@ challenges/
 *_results/
 out/
 RICH/
+
+*.zip

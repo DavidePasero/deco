@@ -261,3 +261,29 @@ class SharedSemanticClassifier(nn.Module):
 
         # Rearrange to [B, C, V] expected by downstream code
         return logits.permute(0, 2, 1).contiguous()
+
+
+class TextFeatureAggregator(nn.Module):
+    def __init__(self, hidden_dim):
+        super(TextFeatureAggregator, self).__init__()
+        self.query = nn.Parameter(torch.randn(hidden_dim, dtype=torch.float16)) #TODO after 1 optim step this becomes -inf
+        self.linear = nn.Linear(hidden_dim, hidden_dim).to(torch.float16)
+
+    def forward(self, text_features):
+        """
+        Args:
+            text_features (Tensor): Shape [N, 2048], where N is the number of tokens.
+
+        Returns:
+            aggregated_features (Tensor): Shape [1, 2048]
+        """
+        # Compute attention scores (dot product with query vector)
+        attention_scores = torch.matmul(text_features, self.query)
+
+        # Apply softmax to get attention weights
+        attention_weights = F.softmax(attention_scores, dim=1).unsqueeze(-1)
+
+        # Compute the weighted sum of the text features
+        aggregated_features = (text_features * attention_weights).sum(dim=1).squeeze()
+
+        return aggregated_features.to(torch.float32)

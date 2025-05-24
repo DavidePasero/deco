@@ -3,16 +3,23 @@ import torch.nn as nn
 import torch
 from dataclasses import dataclass
 from peft import LoraConfig, get_peft_model, TaskType
+import torchvision.transforms as tt
+import torch.nn.functional as F
+
+from models.vlm import *
 
 @dataclass
 class DINOv2DIM:
     LARGE: int = 1024
     GIANT: int = 1536
 
+
 DINOv2NAME_TO_HIDDEN_DIM = {
     "dinov2-large": DINOv2DIM.LARGE,
     "dinov2-giant": DINOv2DIM.GIANT
 }
+
+SMOL_HIDDEN_DIM = 768  # hidden size of SmolVLM‑Base
 
 
 def shared_semantic_classifier(self, att, cont):
@@ -82,8 +89,8 @@ class DECO(nn.Module):
 
         if self.encoder_type == 'hrnet':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
-            self.encoder_part = Encoder(encoder=encoder).to(device) 
-            if self.context:    
+            self.encoder_part = Encoder(encoder=encoder).to(device)
+            if self.context:
                 self.decoder_sem = Decoder(480, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(480, 26, encoder=encoder).to(device)
             self.sem_pool = nn.AdaptiveAvgPool2d((1))
@@ -97,9 +104,9 @@ class DECO(nn.Module):
                 self.semantic_classif = SemanticClassifier(480).to(device)
         elif self.encoder_type == 'swin':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
-            self.encoder_part = Encoder(encoder=encoder).to(device)     
+            self.encoder_part = Encoder(encoder=encoder).to(device)
             self.correction_conv = nn.Conv1d(768, 1024, 1).to(device)
-            if self.context:    
+            if self.context:
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
             self.cross_att = Cross_Att(1024, 1024).to(device)
@@ -170,6 +177,20 @@ class DECO(nn.Module):
         else:
             NotImplementedError('Encoder type not implemented')
 
+        # -----------------------  SmolVLM branch  ------------------------
+        self.use_vlm = use_vlm
+        if self.use_vlm:
+            print("-----------------------Using VLM!!!-----------------------")
+            vlm_id = "HuggingFaceTB/SmolVLM-Instruct"
+            self.tf_agg = lambda x: torch.mean(x, dim=1).squeeze().to(torch.float32) #TODO fix the nan error TextFeatureAggregator(2048).to(device)
+            if encoder == "hrnet":
+                num_channels = 480
+            else:
+                num_channels = DINOv2NAME_TO_HIDDEN_DIM[encoder]
+            self.text_projector = nn.Linear(2048, num_channels).to(device)
+            # second cross‑attention: image ↔ text
+            self.cross_att_text = Cross_Att(num_channels, num_channels).to(device)
+
         self.device = device
 
     def get_encoder_params(self):
@@ -235,13 +256,18 @@ class DECO(nn.Module):
             part_enc_out = part_enc_out.unsqueeze(1)
 
             att = self.cross_att(sem_enc_out, part_enc_out)
+
+            # --- Optional VLM conditioning ---
+            if self.use_vlm:
+                att = self._vlm_cross_att(vlm_feats, visual_features=att)
+
             cont = self.classif(att)
 
-        elif  "dinov2" in self.encoder_type:
+        elif "dinov2" in self.encoder_type:
             if self.num_encoders > 1:
-                out = self._dinov2_forward_pass_two_encoders(img)
+                out = self._dinov2_forward_pass_two_encoders(img, vlm_feats)
             else:
-                out = self._dinov2_forward_pass_shared_encoder(img)
+                out = self._dinov2_forward_pass_shared_encoder(img, vlm_feats)
 
             if self.context:
                 att, cont, sem_mask_pred, part_mask_pred = out
@@ -252,13 +278,13 @@ class DECO(nn.Module):
             sem_enc_out = self.encoder_sem(img)
             part_enc_out = self.encoder_part(img)
 
-            sem_seg = torch.reshape(sem_enc_out, (-1, 768, 1))		
-            part_seg = torch.reshape(part_enc_out, (-1, 768, 1))		
+            sem_seg = torch.reshape(sem_enc_out, (-1, 768, 1))
+            part_seg = torch.reshape(part_enc_out, (-1, 768, 1))
 
-            sem_seg = self.correction_conv(sem_seg)		
-            part_seg = self.correction_conv(part_seg)		
+            sem_seg = self.correction_conv(sem_seg)
+            part_seg = self.correction_conv(part_seg)
 
-            sem_seg = torch.reshape(sem_seg, (-1, 1, 32, 32))		
+            sem_seg = torch.reshape(sem_seg, (-1, 1, 32, 32))
             part_seg = torch.reshape(part_seg, (-1, 1, 32, 32))
 
             if self.context:
@@ -282,19 +308,34 @@ class DECO(nn.Module):
             #   • Run the shared classifier on *all* vertices in parallel
             #     → logits_all : [B, C, 6890]
             # ------------------------------------------------------------------
-            feats = att.squeeze(1)                       # [B, F]
-            logits_all = self.semantic_classif(feats)    # [B, C, 6890]
-        else:
+            feats = att.squeeze(1)  # [B, F]
+            logits_all = self.semantic_classif(feats)  # [B, C, 6890]
+        else: #TODO implement correctly
             # Semantic contact prediction with the separate (non‑shared) classifier
             semantic_cont = self.semantic_classif(att)
 
-        if self.context: 
+        if self.context:
             return cont, sem_mask_pred, part_mask_pred, logits_all
 
         return cont, logits_all
 
-    def _dinov2_forward_pass_shared_encoder(self, img):
-        features = self.encoder(img)
+    def _vlm_cross_att(self, vlm_feats, visual_features):
+        text_feature = vlm_feats
+
+        text_feature_agg = self.tf_agg(text_feature)
+        txt_feat_proj = self.text_projector(text_feature_agg)
+        if len(txt_feat_proj.shape) == 1:   #[B,1024]
+            txt_feat_proj = txt_feat_proj.unsqueeze(0)
+        att = self.cross_att_text(visual_features, txt_feat_proj.unsqueeze(1))
+
+        return att
+
+    def _dinov2_forward_pass_shared_encoder(self, img, vlm_feats = None):
+        if self.train_backbone:
+            features = self.encoder(img)
+        else:
+            with torch.no_grad():
+                features = self.encoder(img)
 
         sem_enc_out = self.scene_projector(features)
         part_enc_out = self.contact_projector(features)
@@ -306,6 +347,10 @@ class DECO(nn.Module):
             part_mask_pred = self.decoder_part(part_seg)
 
         att = self.cross_att(sem_enc_out.unsqueeze(1), part_enc_out.unsqueeze(1))
+
+        if self.use_vlm:
+            att = self._vlm_cross_att(vlm_feats, visual_features=att)
+
         cont = self.classif(att)
 
         if self.context:
@@ -313,7 +358,7 @@ class DECO(nn.Module):
 
         return att, cont
 
-    def _dinov2_forward_pass_two_encoders(self, img):
+    def _dinov2_forward_pass_two_encoders(self, img, vlm_feats = None):
         sem_enc_out = self.encoder_sem(img)
         part_enc_out = self.encoder_part(img)
 
@@ -334,12 +379,19 @@ class DECO(nn.Module):
         part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
 
         att = self.cross_att(sem_enc_out, part_enc_out)
+
+        # --- Optional VLM conditioning ---
+        if self.use_vlm:
+            att = self._vlm_cross_att(vlm_feats, visual_features=att)
+
         cont = self.classif(att)
 
         if self.context:
             return att, cont, sem_mask_pred, part_mask_pred
 
         return att, cont
+
+
 
 class DINOContact(nn.Module):
     def __init__(self, device: str = "cuda", encoder_name: str = "dinov2-large",
@@ -349,7 +401,7 @@ class DINOContact(nn.Module):
         super(DINOContact, self).__init__()
         self.device = device
         self.num_layers_per_model = {
-            "dinov2-giant" : 40,
+            "dinov2-giant": 40,
             "dinov2-large": 24
         }
         self.num_enc_layers = self.num_layers_per_model[encoder_name]
@@ -375,9 +427,14 @@ class DINOContact(nn.Module):
                 features = self.encoder(x)
 
         cont = self.classifier(features)
-        
+
         if self.semantic_classif is not None:
-            feats = features.squeeze(1)                  # [B, F]
-            logits_all = self.semantic_classif(feats)    # [B, C, 6890]
+            feats = features.squeeze(1)  # [B, F]
+            logits_all = self.semantic_classif(feats)  # [B, C, 6890]
             return cont, logits_all
         return cont
+
+
+
+
+

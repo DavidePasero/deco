@@ -3,6 +3,7 @@ import torch
 import pickle as pkl
 import numpy as np
 from utils.metrics import metric, precision_recall_f1score, det_error_metric
+
 def evaluate(pred_dict, gt_dict):
     # combine keys from pred and gt in the same key order
     pred_keys = list(pred_dict.keys())

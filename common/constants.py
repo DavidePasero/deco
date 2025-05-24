@@ -28,7 +28,7 @@ DATASET_FILES = {
         'prox': join(DATASET_NPZ_PATH, 'prox/prox_val_smplx_ds4.npz'),
     },
     'test': {
-        'damon': join(DATASET_NPZ_PATH, 'damon/hot_dca_test.npz'),
+        'damon': join(DATASET_NPZ_PATH, 'damon/hot_dca_test.npz') ,    #'damon/rhobin_damon_test_release.npz'),
         'rich': join(DATASET_NPZ_PATH, 'rich/rich_test_smplx_cropped_bmp.npz'),
         'prox': join(DATASET_NPZ_PATH, 'prox/prox_val_smplx_ds4.npz'),
     },
