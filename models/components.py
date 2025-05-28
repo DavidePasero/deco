@@ -3,14 +3,20 @@ import torchvision
 import torch.nn as nn
 import numpy as np
 from transformers import AutoImageProcessor, AutoModel
+from sentence_transformers import SentenceTransformer
+from typing import List
+import torch.nn.functional as F
+
 
 from utils.hrnet import hrnet_w32
 
 class Encoder(nn.Module):
-    def __init__(self, encoder='hrnet', pretrained=True, device="cuda"):
+    def __init__(self, encoder='hrnet', pretrained=True, device="cuda",
+                 return_cls_token: bool = True):
         super(Encoder, self).__init__()
 
         self.encoder_name = encoder
+        self.return_cls_token = return_cls_token
 
         if encoder == 'swin':
             '''Swin Transformer encoder'''
@@ -33,6 +39,8 @@ class Encoder(nn.Module):
             outputs = self.encoder(x)
             last_hidden_states = outputs.last_hidden_state
             cls_token_embedding = last_hidden_states[:, 0]
+            if not self.return_cls_token:
+                return last_hidden_states[:, 1:]
             return cls_token_embedding
 
         out = self.encoder(x)
@@ -73,6 +81,117 @@ class Self_Attn(nn.Module):
         out = out/np.sqrt(self.channel_in)
         
         return out
+
+
+class EfficientSelfAttention(nn.Module):
+    """Self-attention layer using PyTorch's optimized scaled_dot_product_attention"""
+
+    def __init__(self, in_dim, out_dim, num_heads=8):
+        super(EfficientSelfAttention, self).__init__()
+        self.channel_in = in_dim
+        self.num_heads = num_heads
+        self.head_dim = out_dim // num_heads
+        assert out_dim % num_heads == 0, "out_dim must be divisible by num_heads"
+
+        self.q_proj = nn.Linear(in_dim, out_dim)
+        self.k_proj = nn.Linear(in_dim, out_dim)
+        self.v_proj = nn.Linear(in_dim, out_dim)
+        self.out_proj = nn.Linear(out_dim, in_dim)
+
+        self.scale = (self.head_dim) ** -0.5
+
+    def forward(self, x):
+        """
+        Args:
+            x: input features [B, C, L] where L is sequence length
+        Returns:
+            out: self attention output [B, C, L]
+        """
+        # Reshape input: [B, C, L] -> [B, L, C]
+        batch_size, seq_len, _ = x.shape
+
+        # Project to queries, keys, values
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        # Reshape for multi-head attention: [B, L, C] -> [B, L, H, D] -> [B, H, L, D]
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Use PyTorch's optimized attention implementation
+        attn_output = F.scaled_dot_product_attention(q, k, v)
+
+        # Reshape back: [B, H, L, D] -> [B, L, C]
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+
+        # Final projection
+        output = self.out_proj(attn_output)
+
+        # Return in original format [B, C, L]
+        return output
+
+
+class VisualTextCrossAttention(nn.Module):
+    """Cross-attention between visual and text features using PyTorch's optimized attention"""
+
+    def __init__(self, visual_dim, text_dim, num_heads=8):
+        super(VisualTextCrossAttention, self).__init__()
+        self.visual_dim = visual_dim
+        self.text_dim = text_dim
+        self.num_heads = num_heads
+        self.head_dim = visual_dim // num_heads
+        assert visual_dim % num_heads == 0, "visual_dim must be divisible by num_heads"
+
+        # Visual features as queries
+        self.q_proj = nn.Linear(visual_dim, visual_dim)
+
+        # Text features as keys and values (with projection to match visual dimension)
+        self.k_proj = nn.Linear(text_dim, visual_dim)
+        self.v_proj = nn.Linear(text_dim, visual_dim)
+
+        self.out_proj = nn.Linear(visual_dim, visual_dim)
+        self.layer_norm = nn.LayerNorm(visual_dim)
+
+    def forward(self, v_features, t_features):
+        """
+        Args:
+            visual_features: Visual features [B, L_v, C_v]
+            text_features: Text features [B, L_t, C_t]
+        Returns:
+            out: Cross-attended features in visual feature space [B, L_v, C_v]
+        """
+        # Reshape inputs: [B, C, L] -> [B, L, C]
+
+        batch_size, v_len, _ = v_features.shape
+        _, t_len, _ = t_features.shape
+
+        # Project to queries, keys, values
+        q = self.q_proj(v_features)  # [B, L_v, C_v]
+        k = self.k_proj(t_features)  # [B, L_t, C_v]
+        v = self.v_proj(t_features)  # [B, L_t, C_v]
+
+        # Reshape for multi-head attention
+        q = q.view(batch_size, v_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, H, L_v, D]
+        k = k.view(batch_size, t_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, H, L_t, D]
+        v = v.view(batch_size, t_len, self.num_heads, self.head_dim).transpose(1, 2)  # [B, H, L_t, D]
+
+        # Use PyTorch's optimized attention implementation
+        attn_output = F.scaled_dot_product_attention(q, k, v)  # [B, H, L_v, D]
+
+        # Reshape back: [B, H, L_v, D] -> [B, L_v, C_v]
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, v_len, -1)
+
+        # Final projection
+        output = self.out_proj(attn_output)  # [B, L_v, C_v]
+
+        # Apply layer norm
+        output = self.layer_norm(output)
+
+        # Return in original format [B, C_v, L_v]
+        return output
+
 
 class Cross_Att(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -120,6 +239,19 @@ class Decoder(nn.Module):
                 nn.Softmax(1)
             )
         elif "dinov2" in encoder:
+            self.upsample = nn.Sequential(
+                nn.ConvTranspose2d(in_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.BatchNorm2d(out_dim),
+                nn.ReLU(),
+                nn.ConvTranspose2d(out_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.BatchNorm2d(out_dim),
+                nn.ReLU(),
+                nn.ConvTranspose2d(out_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.BatchNorm2d(out_dim),
+                nn.Softmax(1)
+            )
+        elif "dinov2" in encoder and "vlm" in encoder:
+            # Input feature map is of size 18,18,1024
             self.upsample = nn.Sequential(
                 nn.ConvTranspose2d(in_dim, out_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
                 nn.BatchNorm2d(out_dim),
@@ -287,3 +419,31 @@ class TextFeatureAggregator(nn.Module):
         aggregated_features = (text_features * attention_weights).sum(dim=1).squeeze()
 
         return aggregated_features.to(torch.float32)
+
+
+
+class VLMTextEncoder(nn.Module):
+    def __init__(self, device: str = "cuda"):
+        super().__init__()
+        self.device = device
+        self.model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+        self.tokenizer = self.model.tokenizer
+
+    def forward(self, texts: List[str], **kwargs):
+        #x = x if x is not None else kwargs.get('input_ids')
+        tokens = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(self.device)
+        features = self.model(tokens)
+        return features[("token_embeddings")]
+
+
+class AttentivePooling(nn.Module):
+    def __init__(self, embed_dim,):
+        super().__init__()
+        self.query = nn.Parameter(torch.randn(embed_dim))
+
+    def forward(self, x):
+        # x: [B, seq_len, embed_dim]
+        attn_scores = torch.einsum('d,bsd->bs', self.query, x)  # [B, seq_len]
+        attn_weights = F.softmax(attn_scores, dim=1)  # [B, seq_len]
+        attended = (x * attn_weights.unsqueeze(-1)).sum(dim=1)  # [B, embed_dim]
+        return attended

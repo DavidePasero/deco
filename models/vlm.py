@@ -1,7 +1,6 @@
 import torchvision.transforms as tt
 import torch
-import numpy as np
-from typing import List, Union
+from typing import List, Union, Tuple
 from PIL import Image
 from transformers import AutoProcessor, AutoModelForVision2Seq
 from tqdm import tqdm
@@ -11,155 +10,264 @@ from torch.utils.data import DataLoader
 
 
 class VLMFeatureCache:
-    def __init__(self, cache_dir: str = "./cache/vlm_cache"):
+    """
+    Caches VLM features extracted from images.
+    """
+    def __init__(self, cache_dir: str = "./cache/vlm_features_cache"):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _generate_id(self, image_path: str) -> str:
+        """Generates a unique ID for an image path using MD5 hash."""
         return hashlib.md5(image_path.encode()).hexdigest()
 
     def exists(self, image_path: str) -> bool:
-        file_path = self.cache_dir / f"{self._generate_id(image_path)}.pt"
-        return file_path.exists()
+        """Checks if features for a given image path exist in the cache."""
+        return (self.cache_dir / f"{self._generate_id(image_path)}.pt").exists()
 
     def load(self, image_path: str) -> torch.Tensor:
-        file_path = self.cache_dir / f"{self._generate_id(image_path)}.pt"
-        return torch.load(file_path, map_location="cpu")
+        """Loads features for a given image path from the cache."""
+        return torch.load(self.cache_dir / f"{self._generate_id(image_path)}.pt", map_location="cpu")
 
     def save(self, image_path: str, features: torch.Tensor):
-        assert len(features.shape) == 3, "Features are not three-dimensional"
-        file_path = self.cache_dir / f"{self._generate_id(image_path)}.pt"
-        torch.save(features, file_path)
+        """Saves features for a given image path to the cache."""
+        (self.cache_dir / f"{self._generate_id(image_path)}.pt").save(features)
+
+
+class TextCache:
+    """
+    Caches generated text descriptions from images.
+    """
+    def __init__(self, cache_dir: str = "./cache/vlm_texts_cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _generate_id(self, image_path: str) -> str:
+        """Generates a unique ID for an image path using MD5 hash."""
+        return hashlib.md5(image_path.encode()).hexdigest()
+
+    def exists(self, image_path: str) -> bool:
+        """Checks if a text description for a given image path exists in the cache."""
+        return (self.cache_dir / f"{self._generate_id(image_path)}.txt").exists()
+
+    def load(self, image_path: str) -> str:
+        """Loads a text description for a given image path from the cache."""
+        with open(self.cache_dir / f"{self._generate_id(image_path)}.txt", 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def save(self, image_path: str, text: str):
+        """Saves a text description for a given image path to the cache."""
+        with open(self.cache_dir / f"{self._generate_id(image_path)}.txt", 'w', encoding='utf-8') as f:
+            f.write(text)
 
 
 class VLMManager:
+    """
+    Manages VLM model, feature extraction, and text generation.
+    """
     def __init__(self,
-                 vlm_id: str = "HuggingFaceTB/SmolVLM-Instruct", device: str = "cuda",
-                 cache_dir: str = "./cache/vlm_cache"):
+                 vlm_id: str = "HuggingFaceTB/SmolVLM-Instruct",
+                 device: str = "cuda",
+                 feature_cache_dir: str = "./cache/vlm_features_cache",
+                 text_cache_dir: str = "./cache/vlm_texts_cache"):
         self.vlm_id = vlm_id
         self.device = device
-        self.cache = VLMFeatureCache(cache_dir)
-
-        self._cache_check = False
+        self.feature_cache = VLMFeatureCache(feature_cache_dir)
+        self.text_cache = TextCache(text_cache_dir)
+        self.vlm_processor = None
+        self.vlm_model = None
 
     def _load_vlm(self):
-        self.device = self.device
-        self.vlm_processor = AutoProcessor.from_pretrained(self.vlm_id)
-        self.vlm_model = AutoModelForVision2Seq.from_pretrained(
-            self.vlm_id, torch_dtype=torch.float16
-        ).to(self.device)
+        """Loads the VLM model and processor."""
+        if self.vlm_model is None or self.vlm_processor is None:
+            print("Loading VLM model and processor...")
+            self.vlm_processor = AutoProcessor.from_pretrained(self.vlm_id)
+            self.vlm_model = AutoModelForVision2Seq.from_pretrained(
+                self.vlm_id, torch_dtype=torch.float16
+            ).to(self.device)
 
     def _close_vlm(self):
-        del self.vlm_processor
-        del self.vlm_model
-
-    def _with_vlm(self, func, *args, **kwargs):
-        """
-        Internal context manager for loading and unloading the VLM model.
-        """
-        try:
-            print("Loading VLM model into memory...")
-            self._load_vlm()
-            result = func(*args, **kwargs)
-            return result
-
-        finally:
+        """Unloads the VLM model and processor."""
+        if self.vlm_model is not None:
             print("Unloading VLM model from memory...")
-            self._close_vlm()
+            del self.vlm_processor
+            del self.vlm_model
+            self.vlm_processor = None
+            self.vlm_model = None
             torch.cuda.empty_cache()
 
-    def _register_hook(self):
-        extracted_features = []
+    def _with_vlm(self, func, *args, **kwargs):
+        """Context manager for loading/unloading VLM model."""
+        try:
+            self._load_vlm()
+            return func(*args, **kwargs)
+        finally:
+            self._close_vlm()
+
+    def _prepare_inputs(self, images: List[Image.Image], prompt: Union[str, List[str]]):
+        """Prepares inputs for the VLM model."""
+        return self.vlm_processor(text=prompt, images=images, return_tensors="pt", padding=True, padding_side="left").to(self.device)
+
+    def _extract_single_image_features(self, image: Union[torch.Tensor, Image.Image]) -> torch.Tensor:
+        """
+        Extracts features for a single image.
+        """
 
         def hook_fn(module, input, output):
-            extracted_features.append(output.clone())
+            nonlocal extracted_features
+            extracted_features.append(output.clone().detach())
 
-        handle = self.vlm_model.model.text_model.norm.register_forward_hook(hook_fn)
-        return handle, extracted_features
-
-    def _prepare_inputs(self, images, prompt):
-        return self.vlm_processor(text=prompt, images=images, return_tensors="pt", padding=True).to(self.device)
-
-    def _process_image(self, image, debug=False):
-        trans = tt.ToPILImage()
-        pil_image = trans(image) if isinstance(image, torch.Tensor) else image
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text",
-                 "text": "Describe exactly which objects the human is in contact with, what action is being performed and with what body part"}
-            ]
-        }]
-        prompt = self.vlm_processor.apply_chat_template(messages, add_generation_prompt=True)
+        extracted_features = []
+        handle, extracted_features = self._register_hook(hook_fn)
+        pil_image = tt.ToPILImage()(image) if isinstance(image, torch.Tensor) else image
+        prompt = self._get_fixed_prompt()
         inputs = self._prepare_inputs([pil_image], prompt)
-        return inputs
+        self.vlm_model.generate(**inputs, max_new_tokens=0)  # No text generation here
+        handle.remove()
+        return extracted_features[0].to(self.device)
 
-    def extract_features(self, images, debug=False):
-        return self._with_vlm(self._extract_features, images, debug)
+    def _batch_process_images_features(self, images: List[Image.Image]) -> List[torch.Tensor]:
+        """
+        Processes a batch of PIL images to extract features.
+        """
 
-    def _extract_features(self, images: Union[List[str], torch.Tensor, List[Image.Image]], batch_size: int = 8,
-                         debug=False):
+        def hook_fn(module, input, output):
+            nonlocal extracted_features
+            extracted_features.append(output.clone().detach())
+
+        extracted_features = []
+        handle, extracted_features = self._register_hook(hook_fn)
+        prompt = self._get_fixed_prompt()
+        prompts = [prompt] * len(images)
+        inputs = self._prepare_inputs(images, prompts)
+        self.vlm_model.generate(**inputs, max_new_tokens=0)  # No text generation here
+        handle.remove()
+        return [extracted_features[0][i].to(self.device) for i in range(len(images))]
+
+    def _generate_text_single(self, image: Union[torch.Tensor, Image.Image]) -> str:
+        """Generates text for a single image."""
+        pil_image = tt.ToPILImage()(image) if isinstance(image, torch.Tensor) else image
+        prompt = self._get_fixed_prompt()
+        inputs = self._prepare_inputs([pil_image], prompt)
+        generated_ids = self.vlm_model.generate(**inputs, max_new_tokens=60)
+        return self.vlm_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+    def _generate_text_batch(self, images: List[Image.Image]) -> List[str]:
+        """Generates text for a batch of images."""
+        prompt = self._get_fixed_prompt()
+        prompts = [prompt] * len(images)
+        inputs = self._prepare_inputs(images, prompts)
+        generated_ids = self.vlm_model.generate(**inputs, max_new_tokens=60)
+        return self.vlm_processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+    def extract_features(self, images: Union[List[str], torch.Tensor, List[Image.Image]], batch_size: int = 8) -> List[torch.Tensor]:
+        """
+        Extracts VLM features from images, with caching.
+        """
+        return self._with_vlm(self._extract_features_internal, images, batch_size)
+
+    def _extract_features_internal(self, images, batch_size) -> List[torch.Tensor]:
         if isinstance(images, list) and all(isinstance(img, str) for img in images):
-            return self._extract_from_paths(images, batch_size, debug)
+            return self._extract_features_from_paths_batched(images, batch_size)
         elif isinstance(images, torch.Tensor):
-            return self._extract_from_tensor(images, debug)
+            pil_images = [tt.ToPILImage()(img) for img in images]
+            return self._extract_features_from_pil(pil_images)
         elif isinstance(images, list) and all(isinstance(img, Image.Image) for img in images):
-            return self._extract_from_pil(images, debug)
+            return self._extract_features_from_pil(images)
+        else:
+            raise ValueError("Input must be a list of image paths, a torch.Tensor, or a list of PIL Images.")
 
-    def extract_from_tensor(self, images, debug=False):
-        return self._with_vlm(self._extract_from_tensor, images, debug)
+    def _extract_features_from_pil(self, pil_images: List[Image.Image]) -> List[torch.Tensor]:
+        """Extracts features from a list of PIL images."""
+        return [self._extract_single_image_features(img) for img in pil_images]
 
-    def _extract_from_tensor(self, img_tensor, debug=False):
-        batch_size = img_tensor.shape[0]
-        return [self._extract_single_image(img_tensor[i], debug) for i in range(batch_size)]
-
-    def extract_from_pil(self, images, debug=False):
-        return self._with_vlm(self._extract_from_pil, images, debug)
-
-    def _extract_from_pil(self, pil_images: List[Image.Image], debug=False):
-        return [self._extract_single_image(img, debug) for img in pil_images]
-
-    def extract_from_paths_batched(self, images, debug=False):
-        return self._with_vlm(self._extract_from_paths_batched, images, debug)
-
-    def _extract_from_paths_batched(self, img_paths: List[str], batch_size: int = 8, debug=False):
+    def _extract_features_from_paths_batched(self, img_paths: List[str], batch_size: int) -> List[torch.Tensor]:
+        """Extracts features from a list of image paths using batched processing."""
         features = []
-        to_compute = [path for path in img_paths if not self.cache.exists(path)]
-        cached = [self.cache.load(path) for path in img_paths if self.cache.exists(path)]
+        to_compute_paths = [path for path in img_paths if not self.feature_cache.exists(path)]
+        cached_features = [self.feature_cache.load(path) for path in img_paths if self.feature_cache.exists(path)]
 
-        if to_compute:
-            dataloader = DataLoader(to_compute, batch_size=batch_size, shuffle=False)
-            for batch in tqdm(dataloader, desc="Processing VLM features in batches"):
-                batch_images = [Image.open(path) for path in batch]
-                batch_features = self.batch_process(batch_images, debug)
-                for i, img_path in enumerate(batch):
-                    self.cache.save(img_path, batch_features[i])
-                    cached.append(batch_features[i])
+        if to_compute_paths:
+            dataloader = DataLoader(to_compute_paths, batch_size=batch_size, shuffle=False)
+            for batch_paths in tqdm(dataloader, desc="Processing VLM features in batches"):
+                batch_images = [Image.open(path).convert("RGB") for path in batch_paths]  # Ensure RGB
+                batch_features = self._batch_process_images_features(batch_images)
+                for i, path in enumerate(batch_paths):
+                    self.feature_cache.save(path, batch_features[i])
+                    cached_features.insert(img_paths.index(path), batch_features[i])  # Keep original order
+        return cached_features
 
-        return cached
-
-    def extract_from_paths(self, images, debug=False):
-        return self._with_vlm(self._extract_from_paths, images, debug)
-
-    def _extract_from_paths(self, img_paths: List[str], debug=False):
+    def _extract_features_from_paths(self, img_paths: List[str]) -> List[torch.Tensor]:
+        """Extracts features from a list of image paths."""
         features = []
-
         for img_path in tqdm(img_paths, desc="Precomputing VLM image features"):
-            if self.cache.exists(img_path):
-                # print(f"Loading cached features for: {img_path}")
-                features.append(self.cache.load(img_path))
+            if self.feature_cache.exists(img_path):
+                features.append(self.feature_cache.load(img_path))
             else:
-                print(f"Computing VLM features for: {img_path}")
-                img = Image.open(img_path)
-                img_features = self._extract_single_image(img)
-                # Save to cache
-                self.cache.save(img_path, img_features)
+                img = Image.open(img_path).convert("RGB")  # Ensure RGB
+                img_features = self._extract_single_image_features(img)
+                self.feature_cache.save(img_path, img_features)
                 features.append(img_features)
-
         return features
 
-    def batch_process(self, images: List[Image.Image], debug=False):
+    def generate_texts(self, images: Union[List[str], torch.Tensor, List[Image.Image]], batch_size: int = 8) -> List[str]:
+        """
+        Generates text descriptions for images, with caching.
+        """
+        return self._with_vlm(self._generate_texts_internal, images, batch_size)
+
+    def _generate_texts_internal(self, images, batch_size):
+        if not isinstance(images, list):
+            images = list(images)
+        if all(isinstance(img, str) for img in images):
+            return self._generate_texts_from_paths_batched(images, batch_size)
+        elif isinstance(images, torch.Tensor):
+            pil_images = [tt.ToPILImage()(img) for img in images]
+            return self._generate_texts_from_pil(pil_images)
+        elif all(isinstance(img, Image.Image) for img in images):
+            return self._generate_texts_from_pil(images)
+        else:
+            raise ValueError("Input must be a list of image paths, a torch.Tensor, or a list of PIL Images.")
+
+    def _generate_texts_from_pil(self, pil_images: List[Image.Image]) -> List[str]:
+        """Generates texts from a list of PIL images."""
+        return [self._generate_text_single(img) for img in pil_images]
+
+    def _generate_texts_from_paths_batched(self, img_paths: List[str], batch_size: int) -> List[str]:
+        """Generates texts from a list of image paths using batched processing."""
+        texts = []
+        to_compute_paths = [path for path in img_paths if not self.text_cache.exists(path)]
+        cached_texts = [self.text_cache.load(path) for path in img_paths if self.text_cache.exists(path)]
+
+        if to_compute_paths:
+            dataloader = DataLoader(to_compute_paths, batch_size=batch_size, shuffle=False)
+            for batch_paths in tqdm(dataloader, desc="Generating VLM texts in batches"):
+                batch_images = [Image.open(path).convert("RGB") for path in batch_paths]  # Ensure RGB
+                batch_texts = self._generate_text_batch(batch_images)
+                batch_texts = [self._postprocess_text(text) for text in batch_texts]
+                for i, path in enumerate(batch_paths):
+                    self.text_cache.save(path, batch_texts[i])
+                    cached_texts.insert(img_paths.index(path), batch_texts[i])  # Keep original order
+        return cached_texts
+
+    def _postprocess_text(self, text: str) -> str:
+        return text.split("Assistant: ")[1]
+
+    def _generate_texts_from_paths(self, img_paths: List[str]) -> List[str]:
+        """Generates texts from a list of image paths."""
+        texts = []
+        for img_path in tqdm(img_paths, desc="Generating VLM texts"):
+            if self.text_cache.exists(img_path):
+                texts.append(self.text_cache.load(img_path))
+            else:
+                img = Image.open(img_path).convert("RGB")  # Ensure RGB
+                text = self._generate_text_single(img)
+                self.text_cache.save(img_path, text)
+                texts.append(text)
+        return texts
+
+    def _get_fixed_prompt(self):
+        """Gets the fixed prompt for VLM descriptions."""
         messages = [{
             "role": "user",
             "content": [
@@ -168,389 +276,92 @@ class VLMManager:
                  "text": "Describe exactly which objects the human is in contact with, what action is being performed and with what body part"}
             ]
         }]
-        prompt = [self.vlm_processor.apply_chat_template(messages, add_generation_prompt=True)] * len(images)
-        inputs = self._prepare_inputs(images, prompt)
-        handle, extracted_features = self._register_hook()
+        return self.vlm_processor.apply_chat_template(messages, add_generation_prompt=True)
 
-        generated_ids = self.vlm_model.generate(**inputs, max_new_tokens=60)
+    def check_feature_cache(self, img_paths: List[str]) -> bool:
+        """Checks if features for all given image paths exist in the feature cache."""
+        return all(self.feature_cache.exists(x) for x in img_paths)
 
-        if debug:
-            generated_texts = self.vlm_processor.batch_decode(generated_ids, skip_special_tokens=True)
-            print(generated_texts)
-
-        handle.remove()
-        return [torch.cat(extracted_features[1:]).to(self.device) for _ in images]
-
-    def _extract_single_image(self, image, debug=False):
-        inputs = self._process_image(image, debug)
-        handle, extracted_features = self._register_hook()
-
-        generated_ids = self.vlm_model.generate(**inputs, max_new_tokens=60)
-
-        if debug:
-            generated_texts = self.vlm_processor.batch_decode(generated_ids, skip_special_tokens=True)
-            print(generated_texts)
-
-        handle.remove()
-        return torch.cat(extracted_features[1:]).to(self.device)
-
-    def check_cache(self, img_paths: List[str]):
-        self._cache_check = all([self.cache.exists(x) for  x in img_paths])
-        return self._cache_check
-
-    def __getitem__(self, img_path: str):
-        return self.cache.load(img_path)
-
-    def generate_from_features(self, features: List[torch.Tensor], max_new_tokens: int = 60) -> List[str]:
-        """
-        Generates text descriptions from stored features by passing them through the lm_head.
-
-        Args:
-            features (List[torch.Tensor]): List of pre-extracted features.
-            max_new_tokens (int): Maximum number of tokens to generate.
-
-        Returns:
-            List[str]: List of generated text descriptions.
-        """
-        self.vlm_model.eval()
-        generated_texts = []
-
-        for feature in features:
-            with torch.no_grad():
-                # Add an extra dimension to simulate batch processing
-                feature = feature.unsqueeze(0).to(self.device)
-                output_ids = self.vlm_model.model.text_model.lm_head(feature)
-                decoded_text = self.vlm_processor.batch_decode(output_ids, skip_special_tokens=True)
-                generated_texts.append(decoded_text[0])
-
-        return generated_texts
+    def __getitem__(self, img_path: str) -> torch.Tensor:
+        """Allows accessing cached features using dictionary-like syntax."""
+        return self.text_cache.load(img_path)
 
 
-def apply_vlm_on_tensor(img, vlm_processor, vlm_model, device, debug=False):
+# --- Global utility functions refactored to use VLMManager ---
+
+def precompute_vlm_features_and_texts(imgs: List[str],
+                                      vlm_id: str = "HuggingFaceTB/SmolVLM-Instruct",
+                                      device: str = "cuda",
+                                      feature_cache_dir: str = "./cache/vlm_features_cache",
+                                      text_cache_dir: str = "./cache/vlm_texts_cache",
+                                      batch_size: int = 8,
+                                      ) -> Tuple[List[torch.Tensor], List[str]]:
     """
-    Apply VLM model to each image in the batch and extract text features.
+    Precomputes VLM image features and generates text descriptions for a list of image paths,
+    leveraging caching for both. Uses batched processing for efficiency.
 
-    Parameters:
-    - img: Tensor of shape (batch_size, img_dim), where img_dim is the flattened image.
-    - vlm_processor: The processor for the VLM model.
-    - vlm_model: The VLM model instance.
-    - device: Device to perform the computation on (e.g., "cuda" or "cpu").
+    Args:
+        imgs (List[str]): List of image file paths.
+        vlm_id (str): HuggingFace VLM model ID.
+        device (str): Device to run the VLM on ("cuda" or "cpu").
+        feature_cache_dir (str): Directory for caching image features.
+        text_cache_dir (str): Directory for caching text descriptions.
+        batch_size (int): Number of images to process in each batch.
 
     Returns:
-    - text_features: Tensor of concatenated text features from all images.
+        Tuple[List[torch.Tensor], List[str]]: A tuple containing a list of feature tensors
+        and a list of corresponding text descriptions.
     """
-    trans = tt.ToPILImage()
-    batch_size = img.shape[0]
-    extracted_features_per_image = []
-
-    for i in range(batch_size):
-        # Extract individual image
-        single_img = img[i]
-
-        # Prepare input messages
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text",
-                     "text": "Describe exactly which objects the human is in contact with, what action is being performed and with what body part"}
-                ]
-            },
-        ]
-
-        # Prepare inputs
-        prompt = vlm_processor.apply_chat_template(messages, add_generation_prompt=True)
-        inputs = vlm_processor(text=prompt, images=[trans(single_img)],
-                               return_tensors="pt")
-        inputs = inputs.to(device)
-
-        # Collect the features for the current image
-        extracted_features_per_token = []
-
-        # Define the hook function
-        def hook_fn(module, input, output):
-            extracted_features_per_token.append(output.clone())
-
-        # Register the hook to the last layer of the text_model (before lm_head)
-        handle = vlm_model.model.text_model.norm.register_forward_hook(hook_fn)
-
-        # Generate outputs
-        generated_ids = vlm_model.generate(**inputs, max_new_tokens=60)
-
-        if debug:
-            generated_texts = vlm_processor.batch_decode(
-                generated_ids,
-                skip_special_tokens=True,
-        )
-            print(generated_texts)
-
-        # Collect features for the current image
-        text_features = torch.cat(extracted_features_per_token[1:]).to(device)
-        extracted_features_per_image.append(text_features)
-
-        # Remove the hook after the forward pass to avoid side effects
-        handle.remove()
-
-    # Concatenate all the features along the batch dimension
-    return extracted_features_per_image
+    vlm_manager = VLMManager(vlm_id, device, feature_cache_dir, text_cache_dir)
+    features = vlm_manager.extract_features(imgs, batch_size)
+    texts = vlm_manager.generate_texts(imgs, batch_size)
+    return features, texts
 
 
-def apply_vlm_on_pil(imgs: List[Image.Image], vlm_processor, vlm_model, device, debug=False):
-    """
-    Apply VLM model to each image in the batch and extract text features.
 
-    Parameters:
-    - img: List of PIL images
-    - vlm_processor: The processor for the VLM model.
-    - vlm_model: The VLM model instance.
-    - device: Device to perform the computation on (e.g., "cuda" or "cpu").
-
-    Returns:
-    - text_features: Tensor of concatenated text features from all images.
-    """
-    extracted_features_per_image = []
-
-    for single_img in imgs:
-
-        # Prepare input messages
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text",
-                     "text": "Describe exactly which objects the human is in contact with, what action is being performed and with what body part"}
-                ]
-            },
-        ]
-
-        # Prepare inputs
-        prompt = vlm_processor.apply_chat_template(messages, add_generation_prompt=True)
-        inputs = vlm_processor(text=prompt, images=[single_img],
-                               return_tensors="pt")
-        inputs = inputs.to(device)
-
-        # Collect the features for the current image
-        extracted_features_per_token = []
-
-        # Define the hook function
-        def hook_fn(module, input, output):
-            extracted_features_per_token.append(output.clone())
-
-        # Register the hook to the last layer of the text_model (before lm_head)
-        handle = vlm_model.model.text_model.norm.register_forward_hook(hook_fn)
-
-        # Generate outputs
-        generated_ids = vlm_model.generate(**inputs, max_new_tokens=60)
-
-        if debug:
-            generated_texts = vlm_processor.batch_decode(
-                generated_ids,
-                skip_special_tokens=True,
-        )
-            print(generated_texts)
-
-        # Collect features for the current image
-        text_features = torch.cat(extracted_features_per_token[1:]).to(device)
-        extracted_features_per_image.append(text_features)
-
-        # Remove the hook after the forward pass to avoid side effects
-        handle.remove()
-
-    # Concatenate all the features along the batch dimension
-    return extracted_features_per_image
-
-
-def apply_vlm_on_pil_batch(imgs, vlm_processor, vlm_model, device, cache, debug=False,
-                           batch_size: int = 8):
-    """
-    Apply VLM model to a batch of images and extract text features.
-
-    Parameters:
-    - imgs: List of image paths
-    - vlm_processor: Processor for the VLM model.
-    - vlm_model: The VLM model instance.
-    - device: Device to perform the computation on (e.g., "cuda" or "cpu").
-    - cache: An instance of VLMFeatureCache to manage caching.
-    - debug: Boolean flag to display generated text for debugging.
-
-    Returns:
-    - text_features: List of tensors containing text features for all images.
-    """
-    dataloader = DataLoader(imgs, batch_size=batch_size, shuffle=False)
-    all_features = []
-
-    for batch in tqdm(dataloader, desc="Processing VLM features in batches..."):
-        # Check which images are already cached
-        to_compute = []
-        cached_features = []
-
-        for img_path in batch:
-            if cache.exists(img_path):
-                cached_features.append(cache.load(img_path))
-            else:
-                to_compute.append(img_path)
-
-        if len(to_compute) > 0:
-            # Open images and prepare messages
-            pil_images = [Image.open(path) for path in to_compute]
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text",
-                         "text": "Describe exactly which objects the human is in contact with, what action is being performed and with what body part"}
-                    ]
-                }
-            ]
-
-            # Prepare inputs
-            prompts = [vlm_processor.apply_chat_template(messages, add_generation_prompt=True)] * len(pil_images)
-            inputs = vlm_processor(text=prompts, images=pil_images, return_tensors="pt", padding=True)
-            inputs = inputs.to(device)
-
-            # Collect features for the current batch
-            extracted_features_per_token = []
-
-            # Define the hook function
-            def hook_fn(module, input, output):
-                extracted_features_per_token.append(output.clone())
-
-            # Register the hook to the last layer of the text_model (before lm_head)
-            handle = vlm_model.model.text_model.norm.register_forward_hook(hook_fn)
-
-            # Generate outputs
-            generated_ids = vlm_model.generate(**inputs, max_new_tokens=60)
-
-            if debug:
-                generated_texts = vlm_processor.batch_decode(generated_ids, skip_special_tokens=True)
-                print(generated_texts)
-
-            # Collect features for the current batch
-            for i, path in enumerate(to_compute):
-                features = extracted_features_per_token[i]
-                cache.save(path, features)
-                cached_features.append(features)
-
-            # Remove the hook after the forward pass to avoid side effects
-            handle.remove()
-
-        # Append to the full list of features
-        all_features.extend(cached_features)
-
-    return all_features
-
-def precompute_vlm_features(imgs: Union[List[str], torch.Tensor],
+def precompute_vlm_features(imgs: List[str],
                             vlm_id: str = "HuggingFaceTB/SmolVLM-Instruct",
                             device: str = "cuda",
-                            cache_dir: str = "./cache/vlm_cache"):
+                            feature_cache_dir: str = "./cache/vlm_features_cache",
+                            batch_size: int = 8) -> List[torch.Tensor]:
+    """
+    Precomputes VLM image features for a list of image paths, with caching.
 
-    vlm_cache = VLMFeatureCache(cache_dir=cache_dir)
-    vlm_processor = AutoProcessor.from_pretrained(vlm_id)
-    vlm_model = AutoModelForVision2Seq.from_pretrained(
-        vlm_id,
-        torch_dtype=torch.float16,
-    ).to(device)
+    Args:
+        imgs (List[str]): List of image file paths.
+        vlm_id (str): HuggingFace VLM model ID.
+        device (str): Device to run the VLM on ("cuda" or "cpu").
+        feature_cache_dir (str): Directory for caching image features.
+        batch_size (int): Number of images to process in each batch.
 
-    features = []
-
-    for img_path in tqdm(imgs, desc="Precomputing VLM image features"):
-        if vlm_cache.exists(img_path):
-            #print(f"Loading cached features for: {img_path}")
-            features.append(vlm_cache.load(img_path))
-        else:
-            print(f"Computing VLM features for: {img_path}")
-            img = Image.open(img_path)
-            img_features = apply_vlm_on_pil([img], vlm_processor, vlm_model, device)
-            # Save to cache
-            vlm_cache.save(img_path, img_features[0])
-            features.append(img_features[0])
+    Returns:
+        List[torch.Tensor]: A list of feature tensors.
+    """
+    vlm_manager = VLMManager(vlm_id, device, feature_cache_dir)
+    return vlm_manager.extract_features(imgs, batch_size)
 
 
-    return features
+
+def precompute_vlm_texts(imgs: List[str],
+                         vlm_id: str = "HuggingFaceTB/SmolVLM-Instruct",
+                         device: str = "cuda",
+                         text_cache_dir: str = "./cache/vlm_texts_cache",
+                         batch_size: int = 8) -> List[str]:
+    """
+    Generates and caches text descriptions for a list of image paths.
+
+    Args:
+        imgs (List[str]): List of image file paths.
+        vlm_id (str): HuggingFace VLM model ID.
+        device (str): Device to run the VLM on ("cuda" or "cpu").
+        text_cache_dir (str): Directory for caching text descriptions.
+        batch_size (int): Number of images to process in each batch.
+
+    Returns:
+        List[str]: A list of text descriptions.
+    """
+    vlm_manager = VLMManager(vlm_id, device, text_cache_dir=text_cache_dir)
+    return vlm_manager.generate_texts(imgs, batch_size)
 
 
-def precompute_vlm_features_batched(imgs: Union[List[str], torch.Tensor],
-                            vlm_id: str = "HuggingFaceTB/SmolVLM-Instruct",
-                            device: str = "cuda",
-                            cache_dir: str = "./cache/vlm_cache",
-                            batch_size: int = 8,
-                            debug: bool = False):
-    vlm_cache = VLMFeatureCache(cache_dir=cache_dir)
-    vlm_processor = AutoProcessor.from_pretrained(vlm_id)
-    vlm_model = AutoModelForVision2Seq.from_pretrained(
-        vlm_id,
-        torch_dtype=torch.float16,
-    ).to(device)
 
-    features = []
-    to_compute = []
-    cached_features = []
-
-    # Split into cached and non-cached
-    for img_path in imgs:
-        if vlm_cache.exists(img_path):
-            cached_features.append(vlm_cache.load(img_path))
-        else:
-            to_compute.append(img_path)
-
-    # If there are images to compute, batch them
-    if to_compute:
-        print(f"Computing VLM features for {len(to_compute)} images in batches of {batch_size}")
-        dataloader = DataLoader(to_compute, batch_size=batch_size, shuffle=False)
-
-        for batch in tqdm(dataloader, desc="VLM Forward Pass"):
-            pil_images = [Image.open(path) for path in batch]
-
-            # Prepare inputs
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text",
-                         "text": "Describe exactly which objects the human is in contact with, what action is being performed and with what body part"}
-                    ]
-                }
-            ]
-            prompts = [vlm_processor.apply_chat_template(messages, add_generation_prompt=False)] * len(pil_images)
-            inputs = vlm_processor(text=prompts, images=pil_images, return_tensors="pt", padding=True,
-                                   padding_side="left")
-            inputs = inputs.to(device)
-
-            # Collect features for the current batch
-            extracted_features_per_token = []
-
-            # Hook to extract hidden features
-            def hook_fn(module, input, output):
-                extracted_features_per_token.append(output.clone())
-
-            handle = vlm_model.model.text_model.norm.register_forward_hook(hook_fn)
-
-            # Generate outputs
-            generated_ids = vlm_model.generate(**inputs, max_new_tokens=200)
-
-            if debug:
-                generated_texts = vlm_processor.batch_decode(
-                    generated_ids,
-                    skip_special_tokens=True,
-                )
-                print(generated_texts)
-
-            # Unregister hook
-            handle.remove()
-
-            # Save features and append to results
-            for i, img_path in enumerate(batch):
-                features.append(extracted_features_per_token[i])
-                vlm_cache.save(img_path, extracted_features_per_token[i])
-
-    features = []
-
-    # Reload them to have them in the same order as the input imgs
-    for img_path in imgs:
-        features.append(vlm_cache.load(img_path))
-
-    features

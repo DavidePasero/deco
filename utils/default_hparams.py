@@ -16,6 +16,8 @@ hparams.DATASET = CN()
 hparams.DATASET.BATCH_SIZE = 64
 hparams.DATASET.NUM_WORKERS = 4
 hparams.DATASET.NORMALIZE_IMAGES = True
+hparams.DATASET.AUGMENTATION = True
+
 
 # Optimizer hparams
 hparams.OPTIMIZER = CN()
@@ -44,6 +46,8 @@ hparams.TRAINING.SHARED_SEMANTIC_CLASSIFIER = True
 hparams.TRAINING.TRAIN_BACKBONE = False
 hparams.TRAINING.NUM_ENCODER = 1
 hparams.TRAINING.USE_VLM = False
+hparams.TRAINING.TRAIN_VLM_TEXT_ENCODER = False
+hparams.TRAINING.PATCH_CROSS_ATTENTION = False
 
 # Training hparams
 hparams.VALIDATION = CN()
