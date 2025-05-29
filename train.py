@@ -32,9 +32,6 @@ def _create_run_name(hparams):
 
 
 def train(hparams):
-    if hparams.TRAINING.MODEL_TYPE == "deco" and hparams.DATASET.AUGMENTATION and hparams.TRAINING.CONTEXT:
-        raise NotImplementedError("Augmentation is not implemented for DECO yet if you train with context, because the segmentation masks are not available.")
-
     if hparams.TRAINING.TRAIN_BACKBONE and "dino" in hparams.TRAINING.ENCODER:
         warnings.warn("Backbone will be trained. Make sure this behavior is wanted!")
     if hparams.TRAINING.MODEL_TYPE == 'deco':
@@ -141,7 +138,7 @@ if __name__ == '__main__':
     val_datasets = []
     for ds in hparams.VALIDATION.DATASETS:
         if ds in ['rich', 'prox']:
-            val_datasets.append(BaseDataset(ds, 'val', model_type='smplx', normalize=hparams.DATASET.NORMALIZE_IMAGES,
+            val_datasets.append(BaseDataset(ds, 'val', model_type='smpl', normalize=hparams.DATASET.NORMALIZE_IMAGES,
                                 use_vlm=hparams.TRAINING.USE_VLM)),
         elif ds in ['damon']:
             val_datasets.append(BaseDataset(ds, 'val', model_type='smpl', normalize=hparams.DATASET.NORMALIZE_IMAGES,

@@ -58,7 +58,7 @@ class BaseDataset(Dataset):
         print(f'Loading dataset: {constants.DATASET_FILES[mode][dataset]} for mode: {mode}')
 
         self.data = np.load(constants.DATASET_FILES[mode][dataset], allow_pickle=True)
-
+        
         self.images = self.data['imgname']
 
         # get 3d contact labels, if available
@@ -77,7 +77,7 @@ class BaseDataset(Dataset):
             self.num_object_classes = 70
         except KeyError:
             self.has_semantic_contact = np.zeros(len(self.images))
-            self.num_object_classes = 1  # Default to single class for binary contact
+            self.num_object_classes = 70  # Default to single class for binary contact
 
         # get 2d polygon contact labels, if available
         try:
@@ -119,20 +119,20 @@ class BaseDataset(Dataset):
         if transforms:
             self.use_transforms = transforms
             self.transform = v2.Compose([
-                v2.RandomHorizontalFlip(),
-                v2.RandomVerticalFlip(),
-                v2.RandomRotation(degrees=30),
-                v2.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.2)),
+               # v2.RandomHorizontalFlip(),
+               # v2.RandomVerticalFlip(),
+               # v2.RandomRotation(degrees=30),
+               # v2.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.2)),
                 v2.RandomApply([v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)], p=0.5),
-                v2.RandomGrayscale(p=0.2),
+               # v2.RandomGrayscale(p=0.2),
                 v2.RandomInvert(p=0.2),
                 v2.RandomSolarize(threshold=0.5, p=0.2),
                 v2.RandomAutocontrast(p=0.2),
                 v2.RandomEqualize(p=0.2),
                 v2.RandomPosterize(bits=4, p=0.2),
                 v2.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
-                v2.RandomPerspective(distortion_scale=0.2, p=0.2),
-                v2.RandomApply([v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1))], p=0.3),
+               # v2.RandomPerspective(distortion_scale=0.2, p=0.2),
+               # v2.RandomApply([v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1))], p=0.3),
                 v2.Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD),
                 ])
         else:
@@ -300,7 +300,7 @@ class BaseDataset(Dataset):
                     semantic_contact[obj_class_idx, vertex_indices] = 1.0
         else:
             # If no semantic contacts, create a single-class tensor with binary contacts
-            semantic_contact = np.zeros((self.num_object_classes, self.n_vertices))
+            semantic_contact = -np.ones((self.num_object_classes, self.n_vertices))
             if self.has_contact_3d[index]:
                 # Use the first class for binary contacts
                 semantic_contact[0] = contact_label_3d
@@ -364,6 +364,8 @@ class BaseDataset(Dataset):
 
         item['img_path'] = img_path
         item['pose'] = torch.tensor(pose, dtype=torch.float32)
+        if self.dataset == "rich":
+            item['pose'] = torch.cat((item['pose'], torch.zeros(6)))
         item['betas'] = torch.tensor(betas, dtype=torch.float32)
         item['transl'] = torch.tensor(transl, dtype=torch.float32)
         item['cam_k'] = self.cam_k[index]
@@ -377,10 +379,15 @@ class BaseDataset(Dataset):
         item['has_contact_3d'] = self.has_contact_3d[index]
         item['has_semantic_contact'] = self.has_semantic_contact[index]
         item['has_polygon_contact_2d'] = self.has_polygon_contact_2d[index]
+        item["dataset"] = self.dataset
 
 
         if self.use_vlm:
-            item["vlm_features"] = self.vlm_manager[self.images[index]]
+            if self.dataset == "rich":
+                imgname = "Mask2Former/rich4download/" + os.path.basename(self.sem_masks[index])
+            else:
+                imgname = self.images[index]
+            item["vlm_features"] = self.vlm_manager[imgname]
 
         return item
 

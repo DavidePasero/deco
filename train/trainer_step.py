@@ -87,7 +87,10 @@ class TrainStepper():
         has_polygon_contact_2d = batch['has_polygon_contact_2d'].to(self.device)
 
         # Add semantic contact labels
-        semantic_contact_labels = batch['semantic_contact'].to(self.device)
+        semantic_contact_labels = batch.get('semantic_contact')
+        if semantic_contact_labels is not None:
+            semantic_contact_labels = semantic_contact_labels.to(self.device)
+            
         has_semantic_contact = batch['has_semantic_contact'].to(self.device)
 
         vlm_feats = batch.get('vlm_features')
@@ -107,7 +110,6 @@ class TrainStepper():
 
         # CONTACT LOSS CALCULATION
         total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(cont, semantic_logits, semantic_contact_labels)
-
 
         if self.pal_loss_weight > 0 and (is_smplx == 0).sum() > 0:
             smpl_body_params = {'pose': pose[is_smplx == 0], 'betas': betas[is_smplx == 0],

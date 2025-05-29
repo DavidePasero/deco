@@ -16,7 +16,7 @@ class MixedDataset(torch.utils.data.Dataset):
         self.datasets = []
         for ds in self.dataset_list:
             if ds in ['rich', 'prox']:
-                self.datasets.append(BaseDataset(ds, mode, model_type='smplx', **kwargs))
+                self.datasets.append(BaseDataset(ds, mode, model_type='smpl', **kwargs))
             elif ds in ['damon']:
                 self.datasets.append(BaseDataset(ds, mode, model_type='smpl', **kwargs))
             else:

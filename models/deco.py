@@ -152,18 +152,18 @@ class DECO(nn.Module):
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
 
             if patch_cross_attention:
-                self.cross_att = VisualTextCrossAttention(1024, 1024).to(device)
-                self.self_att = EfficientSelfAttention(1024, 1024).to(device)
-                self.pooling = AttentivePooling(1024).to(device)
+                self.cross_att = VisualTextCrossAttention(hidden_dim, hidden_dim).to(device)
+                self.self_att = EfficientSelfAttention(hidden_dim, hidden_dim).to(device)
+                self.pooling = AttentivePooling(hidden_dim).to(device)
             else:
-                self.cross_att = Cross_Att(1024, 1024).to(device)
+                self.cross_att = Cross_Att(hidden_dim, hidden_dim).to(device)
 
-            self.classif = Classifier(1024).to(device)
+            self.classif = Classifier(hidden_dim).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
+                self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(1024).to(device)
+                self.semantic_classif = SemanticClassifier(hidden_dim ).to(device)
 
             # ---- LoRA adaptation on DINOv2 backbone ----
             if self.train_backbone and 'dinov2' in self.encoder_type:
@@ -224,7 +224,9 @@ class DECO(nn.Module):
             else:
                 self.cross_att_text = VisualTextCrossAttention(num_channels, 768).to(device)
                 self.self_att = EfficientSelfAttention(num_channels, num_channels).to(device)
-                self.proj = nn.Linear(num_channels, num_channels).to(device)
+
+            self.dec_proj_sem = nn.Linear(num_channels, 1024).to(device)
+            self.dec_proj_part = nn.Linear(num_channels, 1024).to(device)
 
         self.device = device
 
@@ -250,6 +252,7 @@ class DECO(nn.Module):
                 params += list(self.scene_projector.parameters())
             params += list(self.decoder_sem.parameters())
             params += list(self.correction_conv.parameters()) if hasattr(self, "correction_conv") else []
+            params += list(self.dec_proj_sem.parameters())
         return params
 
     def get_part_branch_params(self):
@@ -263,6 +266,8 @@ class DECO(nn.Module):
                 params += list(self.contact_projector.parameters())
             params += list(self.decoder_part.parameters())
             params += list(self.correction_conv.parameters()) if hasattr(self, "correction_conv") else []
+            params += list(self.dec_proj_part.parameters())
+
         return params
 
     def get_contact_branch_params(self):
@@ -403,6 +408,7 @@ class DECO(nn.Module):
             att = self.part_self_att(att)
         else:
             raise ValueError(f"Unknown target branch: {target_branch}")
+
         return att
 
 
@@ -417,8 +423,10 @@ class DECO(nn.Module):
         part_enc_out = self.contact_projector(features)
 
         if self.context:
-            sem_seg = torch.reshape(sem_enc_out, (-1, 1, 32, 32))
-            part_seg = torch.reshape(part_enc_out, (-1, 1, 32, 32))
+            dec_feats = self.dec_proj_sem(sem_enc_out)
+            part_feats = self.dec_proj_part(part_enc_out)
+            sem_seg = torch.reshape(dec_feats, (-1, 1, 32, 32))
+            part_seg = torch.reshape(part_feats, (-1, 1, 32, 32))
             sem_mask_pred = self.decoder_sem(sem_seg)
             part_mask_pred = self.decoder_part(part_seg)
 
@@ -447,8 +455,10 @@ class DECO(nn.Module):
 
 
         if self.context:
-            sem_mask_pred = self.decoder_sem(sem_enc_out.mean(axis=1).reshape(-1, 1, 32, 32))
-            part_mask_pred = self.decoder_part(part_enc_out.mean(axis=1).reshape(-1, 1, 32, 32))
+            dec_feats = self.dec_proj_sem(sem_enc_out)
+            part_feats = self.dec_proj_part(part_enc_out)
+            sem_mask_pred = self.decoder_sem(dec_feats.mean(axis=1).reshape(-1, 1, 32, 32))
+            part_mask_pred = self.decoder_part(part_feats.mean(axis=1).reshape(-1, 1, 32, 32))
 
        # sem_enc_out = torch.reshape(sem_seg, (-1, 1, 1024))
        # part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
