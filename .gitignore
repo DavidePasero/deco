@@ -34,5 +34,7 @@ challenges/
 *_results/
 out/
 RICH/
+rich/
 
 *.zip
+Mask2Former/

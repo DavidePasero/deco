@@ -13,7 +13,9 @@ from PIL import ImageDraw, ImageFont
 import trimesh
 import pyrender
 
+
 from models.deco import DECO, DINOContact
+from models.vlm import VLMManager
 from common import constants
 
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
@@ -39,6 +41,7 @@ else:
 
 def initiate_model(args):
     if args.model_type == 'deco':
+        print (args.train_backbone)
         deco_model = DECO(
             args.encoder,
             context=args.context,
@@ -46,7 +49,10 @@ def initiate_model(args):
             classifier_type=args.classifier_type,
             num_encoders=args.num_encoder,
             train_backbone=args.train_backbone,
-            )   # set up DinoContact here
+            train_vlm_text_encoder=args.train_vlm_text_encoder,
+            use_vlm=args.use_vlm,
+            patch_cross_attention=args.patch_cross_attention,
+        )
     elif args.model_type ==  'dinoContact':
         deco_model = DINOContact(args.device)
     else:
@@ -54,14 +60,8 @@ def initiate_model(args):
 
     logger.info(f'Loading weights from {args.model_path}')
     checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
-
-    #### DEBUG
-    if args.model_type == 'dinoContact':
-        state_dict_model = 'dinocontact'
-    else:
-        state_dict_model = 'deco'
-
-    deco_model.load_state_dict(checkpoint[state_dict_model], strict=False)
+    key = "deco" if args.model_type == "deco" else "dinocontact"
+    deco_model.load_state_dict(checkpoint[key], strict=True)
 
     deco_model.eval()
 
@@ -169,11 +169,18 @@ def create_scene(mesh, img, focal_length=500, camera_center=250, img_res=500):
 
 def main(args):
     if os.path.isdir(args.img_src):
-        images = glob.iglob(args.img_src + '/*', recursive=True)
+        images = list(glob.iglob(args.img_src + '/*', recursive=True))
     else:
         images = [args.img_src]
 
+    print(images)
+    print(".........................")
+    print("Out dir: " + args.out_dir)
     deco_model = initiate_model(args)
+
+    if args.use_vlm:
+        vlm_manager = VLMManager()
+        vlm_manager.generate_texts(images, batch_size=4)
     
     smpl_path = os.path.join(constants.SMPL_MODEL_DIR, 'smpl_neutral_tpose.ply')
     
@@ -184,10 +191,15 @@ def main(args):
         img = img[np.newaxis,:,:,:]
         img = torch.tensor(img, dtype = torch.float32).to(device)
 
-        if args.context:
-            cont, _, _, semantic_logits = deco_model(img)
+        if args.use_vlm:
+            text_features = [vlm_manager[img_name]]
         else:
-            cont, semantic_logits = deco_model(img)
+            text_features = None
+
+        if args.context:
+            cont, _, _, semantic_logits = deco_model(img, vlm_feats=text_features)
+        else:
+            cont, semantic_logits = deco_model(img, vlm_feats=text_features)
         cont = cont.detach().cpu()                 # keep as Tensor
         semantic_logits = semantic_logits.detach().cpu()          # keep as Tensor
         
@@ -318,34 +330,33 @@ def create_empty_legend(height=256):
     
     return legend
 
-if __name__=='__main__':
-    if __name__ == '__main__':
-        parser = argparse.ArgumentParser(description="3D Mesh Rendering and Semantic Contact Visualization")
-        parser.add_argument('--img_src', help='Source of image(s). Can be file or directory',
-                            default='./demo_out', type=str)
-        parser.add_argument('--out_dir', help='Where to store images',
-                            default='./demo_out', type=str)
-        parser.add_argument('--model_path', help='Path to best model weights',
-                            default='./checkpoints/Other_Checkpoints/deco_shared_classifier_best.pth', type=str)
-        parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+',
-                            type=int, default=[130, 130, 130, 255])
-        parser.add_argument('--annot_colour', help='Colour of the annotation', nargs='+',
-                            type=int, default=[0, 255, 0, 255])
-        parser.add_argument('--model_type', help='Type of the model to load (deco or dinoContact)',
-                            default='deco', type=str)
-        parser.add_argument('--encoder', help='Flag to train the encoder',
-                            type=str, default="hrnet")
-        parser.add_argument('--context', help='Flag to train the context model',
-                            action='store_true')
-        parser.add_argument('--classifier_type', help='Classifier type for the model',
-                            default='shared', type=str)
-        parser.add_argument('--device', help='Device to use (cuda or cpu)',
-                            default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
-        parser.add_argument('--num_encoder', help='Number of encoders',
-                            type=int, default=2)
-        parser.add_argument('--train-backbone', action='store_true')
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="3D Mesh Rendering and Semantic Contact Visualization")
+    parser.add_argument('--img_src', help='Source of image(s). Can be file or directory',
+                        default='./example_images', type=str)
+    parser.add_argument('--out_dir', help='Where to store images',
+                        default='./demo_out_help', type=str)
+    parser.add_argument('--model_path', help='Path to best model weights',
+                        default='./checkpoints/Other_Checkpoints/deco_dino_no_vlm_rich_pca_best.pth', type=str)
+    parser.add_argument('--mesh_colour', help='Colour of the mesh', nargs='+',
+                        type=int, default=[130, 130, 130, 255])
+    parser.add_argument('--annot_colour', help='Colour of the annotation', nargs='+',
+                        type=int, default=[0, 255, 0, 255])
+    parser.add_argument('--model_type', help='Type of the model to load (deco or dinoContact)',
+                    default='deco', type=str)
+    parser.add_argument('--encoder', help='Flag to train the encoder',
+                        type=str, default="dinov2-giant")
+    parser.add_argument('--num_encoder', help='Number of encodersr',
+                        type=int, default=2)
+    parser.add_argument('--classifier_type', help='Classifier type for the model',
+                        default='shared', type=str)
+    parser.add_argument('--device', help='Device to use (cuda or cpu)',
+                        default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+    parser.add_argument('--train-backbone', action='store_true')
+    parser.add_argument('--context', action='store_true')
+    parser.add_argument('--use-vlm', action='store_true')
+    parser.add_argument('--train-vlm-text-encoder', action='store_true')
+    parser.add_argument('--patch-cross-attention', action='store_true')
 
-        args = parser.parse_args()
-        main(args)
-
+    args = parser.parse_args()
     main(args)

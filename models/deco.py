@@ -115,13 +115,13 @@ class DECO(nn.Module):
             if self.context:
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
-            self.cross_att = Cross_Att(1024, 1024).to(device)
-            self.classif = Classifier(1024).to(device)
+            self.cross_att = Cross_Att(1536, 1536).to(device)
+            self.classif = Classifier(1536).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
+                self.semantic_classif = SharedSemanticClassifier(1536).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(1024).to(device)
+                self.semantic_classif = SemanticClassifier(1536).to(device)
 
         elif "dinov2" in self.encoder_type:
             self.num_encoders = num_encoders
@@ -156,14 +156,14 @@ class DECO(nn.Module):
                 self.self_att = EfficientSelfAttention(hidden_dim, hidden_dim).to(device)
                 self.pooling = AttentivePooling(hidden_dim).to(device)
             else:
-                self.cross_att = Cross_Att(hidden_dim, hidden_dim).to(device)
+                self.cross_att = Cross_Att(1024, 1024).to(device) # This needs to stay like this because of the 32x32 segmentation
 
-            self.classif = Classifier(hidden_dim).to(device)
+            self.classif = Classifier(hidden_dim if (patch_cross_attention or use_vlm) else 1024).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device)
+                self.semantic_classif = SharedSemanticClassifier(hidden_dim if (patch_cross_attention or use_vlm) else 1024).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(hidden_dim ).to(device)
+                self.semantic_classif = SemanticClassifier(hidden_dim if (patch_cross_attention or use_vlm) else 1024).to(device)
 
             # ---- LoRA adaptation on DINOv2 backbone ----
             if self.train_backbone and 'dinov2' in self.encoder_type:
@@ -190,14 +190,17 @@ class DECO(nn.Module):
         else:
             NotImplementedError('Encoder type not implemented')
 
+        if encoder == "hrnet":
+            num_channels = 480
+        else:
+            num_channels = DINOv2NAME_TO_HIDDEN_DIM[encoder]
+        self.dec_proj_sem = nn.Linear(num_channels, 1024).to(device)
+        self.dec_proj_part = nn.Linear(num_channels, 1024).to(device)
+
         # -----------------------  SmolVLM branch  ------------------------
         self.use_vlm = use_vlm
         if self.use_vlm:
             print("--------------------------------------------- Using VLM  ---------------------------------------------")
-            if encoder == "hrnet":
-                num_channels = 480
-            else:
-                num_channels = DINOv2NAME_TO_HIDDEN_DIM[encoder]
 
             self.vlm_text_encoder = VLMTextEncoder(device=device)
 
@@ -225,9 +228,6 @@ class DECO(nn.Module):
                 self.cross_att_text = VisualTextCrossAttention(num_channels, 768).to(device)
                 self.self_att = EfficientSelfAttention(num_channels, num_channels).to(device)
 
-            self.dec_proj_sem = nn.Linear(num_channels, 1024).to(device)
-            self.dec_proj_part = nn.Linear(num_channels, 1024).to(device)
-
         self.device = device
 
     def get_encoder_params(self):
@@ -252,7 +252,7 @@ class DECO(nn.Module):
                 params += list(self.scene_projector.parameters())
             params += list(self.decoder_sem.parameters())
             params += list(self.correction_conv.parameters()) if hasattr(self, "correction_conv") else []
-            params += list(self.dec_proj_sem.parameters())
+            params += list(self.dec_proj_sem.parameters()) if hasattr(self, "dec_proj_sem") else []
         return params
 
     def get_part_branch_params(self):
@@ -266,7 +266,7 @@ class DECO(nn.Module):
                 params += list(self.contact_projector.parameters())
             params += list(self.decoder_part.parameters())
             params += list(self.correction_conv.parameters()) if hasattr(self, "correction_conv") else []
-            params += list(self.dec_proj_part.parameters())
+            params += list(self.dec_proj_part.parameters()) if hasattr(self, "dec_proj_part") else []
 
         return params
 
@@ -276,7 +276,7 @@ class DECO(nn.Module):
         """
         base_params = list(self.cross_att.parameters()) + list(self.classif.parameters()) + list(self.semantic_classif.parameters())
 
-        if self.patch_cross_attention:
+        if self.patch_cross_attention or self.use_vlm:
             base_params += list(self.pooling.parameters())
 
         return base_params
@@ -291,10 +291,10 @@ class DECO(nn.Module):
         base_params = list()
 
         if self.num_encoders == 2:
-            base_params += list(self.cross_att_text_sem.parameters())  + list(self.sem_self_att.parameters()) + list(self.sem_proj.parameters())
-            base_params += list(self.cross_att_text_part.parameters()) + list(self.part_self_att.parameters()) + list(self.part_proj.parameters())
+            base_params += list(self.cross_att_text_sem.parameters())  + list(self.sem_self_att.parameters()) 
+            base_params += list(self.cross_att_text_part.parameters()) + list(self.part_self_att.parameters()) 
         else:
-            base_params += list(self.cross_att_text.parameters()) + list(self.self_att.parameters()) + list(self.proj.parameters())
+            base_params += list(self.cross_att_text.parameters()) + list(self.self_att.parameters())
 
         if self.train_vlm_text_encoder:
             base_params += list(self.vlm_text_encoder.parameters())
@@ -449,19 +449,33 @@ class DECO(nn.Module):
         sem_enc_out = self.encoder_sem(img)
         part_enc_out = self.encoder_part(img)
 
-        if self.use_vlm:
-            sem_enc_out = self._apply_vlm(vlm_feats, visual_features=sem_enc_out, target_branch="sem")
-            part_enc_out = self._apply_vlm(vlm_feats, visual_features=part_enc_out, target_branch="part")
+        if self.patch_cross_attention or self.use_vlm:
+            if self.use_vlm:
+                sem_enc_out = self._apply_vlm(vlm_feats, visual_features=sem_enc_out, target_branch="sem")
+                part_enc_out = self._apply_vlm(vlm_feats, visual_features=part_enc_out, target_branch="part")
 
+            if self.context:
+                dec_feats = self.dec_proj_sem(sem_enc_out)
+                part_feats = self.dec_proj_part(part_enc_out)
+                sem_mask_pred = self.decoder_sem(dec_feats.mean(axis=1).reshape(-1, 1, 32, 32))
+                part_mask_pred = self.decoder_part(part_feats.mean(axis=1).reshape(-1, 1, 32, 32))
+        else:
+            sem_seg = torch.reshape(sem_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+            part_seg = torch.reshape(part_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+            sem_seg = self.correction_conv(sem_seg)
+            part_seg = self.correction_conv(part_seg)
 
-        if self.context:
-            dec_feats = self.dec_proj_sem(sem_enc_out)
-            part_feats = self.dec_proj_part(part_enc_out)
-            sem_mask_pred = self.decoder_sem(dec_feats.mean(axis=1).reshape(-1, 1, 32, 32))
-            part_mask_pred = self.decoder_part(part_feats.mean(axis=1).reshape(-1, 1, 32, 32))
+            sem_seg = torch.reshape(sem_seg, (-1, 1, 32, 32))
+            part_seg = torch.reshape(part_seg, (-1, 1, 32, 32))
+            sem_enc_out = sem_enc_out.unsqueeze(1)
+            part_enc_out = part_enc_out.unsqueeze(1)
 
-       # sem_enc_out = torch.reshape(sem_seg, (-1, 1, 1024))
-       # part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
+            if self.context:
+                sem_mask_pred = self.decoder_sem(sem_seg)
+                part_mask_pred = self.decoder_part(part_seg)
+        
+            sem_enc_out = torch.reshape(sem_seg, (-1, 1, 1024))
+            part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
 
         att = self.cross_att(sem_enc_out, part_enc_out)
         if self.patch_cross_attention:

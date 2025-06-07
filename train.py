@@ -60,7 +60,7 @@ def train(hparams):
         hparams.TRAINING.CONTEXT = False
 
     solver = TrainStepper(deco_model, hparams.TRAINING.CONTEXT, hparams.OPTIMIZER.LR, hparams.TRAINING.LOSS_WEIGHTS,
-                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, run_name=_create_run_name(hparams))
+                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, use_semantic_class_balanced_loss = hparams.TRAINING.USE_SEMANTIC_CLASS_BALANCED_LOSS, run_name=_create_run_name(hparams))
 
     vb_f1 = 0
     start_ep = 0

@@ -4,6 +4,9 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
+
+
         {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
@@ -11,6 +14,11 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": ["--cfg", "configs/cfg_train.yml"]
+            //"args": ["--model_path", "RICH/old_checkpoints/deco++_best.pth", "--model_type", "deco", 
+            //"--encoder", "dinov2-giant", 
+            //"--num_encoder", "2", "--context", 
+            //"--train-backbone", "--use-vlm", "--train-vlm-text-encoder", 
+            //"--patch-cross-attention"]
         }
     ]
 }

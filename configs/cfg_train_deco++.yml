@@ -1,0 +1,40 @@
+EXP_NAME: 'deco++'
+PROJECT_NAME: 'DECO_demo_training'
+OUTPUT_DIR: 'deco++_results'
+CONDOR_DIR: ''
+DATASET:
+  BATCH_SIZE: 25
+  NUM_WORKERS: 8
+  NORMALIZE_IMAGES: [True]
+  AUGMENTATION: True
+OPTIMIZER:
+  TYPE: 'adam'
+  LR: [1e-5]
+  NUM_UPDATE_LR: 30
+TRAINING:
+  ENCODER: 'dinov2-giant'
+  NUM_ENCODER: 2
+  MODEL_TYPE: "deco"
+  CONTEXT: [True]
+  NUM_EPOCHS: 100
+  NUM_EARLY_STOP: 50
+  SUMMARY_STEPS: 5
+  CHECKPOINT_EPOCHS: 20
+  DATASETS: ['damon', 'rich']
+  DATASET_MIX_PDF: ['0.5', '0.5'] # should sum to 1.0 unless you want to weight by dataset size
+  DATASET_ROOT_PATH: ''
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco++.pth'
+  LOSS_WEIGHTS: 1.
+  PAL_LOSS_WEIGHTS: 0.01
+  SEMANTIC_CLASSIFIER: True
+  SHARED_SEMANTIC_CLASSIFIER: True
+  CLASSIFIER_TYPE: "shared"
+  TRAIN_BACKBONE: True #only for DINO backbone
+  USE_VLM: True
+  TRAIN_VLM_TEXT_ENCODER: True
+  PATCH_CROSS_ATTENTION: True
+
+VALIDATION:
+  SUMMARY_STEPS: 5
+  DATASETS: ['damon']
+  MAIN_DATASET: 'damon'

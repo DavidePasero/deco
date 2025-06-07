@@ -8,6 +8,6 @@ if __name__ == '__main__':
     parser.add_argument('--out_dir', type=str, default="./cache/vlm_texts_cache", help='path to output directory')
     parser.add_argument('--batch_size', type=int, default=8, help='batch size')
     args = parser.parse_args()
-    vlm_manager = VLMManager()
+    vlm_manager = VLMManager(device="cpu")
     imgs = [os.path.join(args.img_dir, x) for x in os.listdir(args.img_dir)]
     vlm_manager.generate_texts(imgs, args.batch_size)

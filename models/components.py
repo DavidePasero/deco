@@ -11,10 +11,10 @@ import torch.nn.functional as F
 from utils.hrnet import hrnet_w32
 
 class Encoder(nn.Module):
-    def __init__(self, encoder='hrnet', pretrained=True, device="cuda",
+    def __init__(self, encoder='hrnet', pretrained=True, device="cuda" if torch.cuda.is_available else "cpu",
                  return_cls_token: bool = True):
         super(Encoder, self).__init__()
-
+        device="cuda" if torch.cuda.is_available else "cpu"
         self.encoder_name = encoder
         self.return_cls_token = return_cls_token
 

@@ -7,7 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class TrainStepper():
-    def __init__(self, deco_model, context, learning_rate, loss_weight, pal_loss_weight, device, log_dir="runs",
+    def __init__(self, deco_model, context, learning_rate, loss_weight, pal_loss_weight, device, use_semantic_class_balanced_loss, log_dir="runs",
                  run_name: str = ""):
         self.device = device
         self.global_step = 0
@@ -23,7 +23,7 @@ class TrainStepper():
         self.lr = learning_rate
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
-        self.semantic_contact_loss = MultiClassContactLoss().to(device)
+        self.semantic_contact_loss = MultiClassContactLoss(use_semantic_class_balanced_loss=use_semantic_class_balanced_loss).to(device)
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
