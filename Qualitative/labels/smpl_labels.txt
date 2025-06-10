@@ -1,0 +1,29 @@
+0: Unlabeled
+1: hips
+2: leftUpLeg
+3: rightUpLeg
+4: spine2
+5: leftLeg
+6: rightLeg
+7: spine1
+8: leftFoot
+9: rightFoot
+10: spine
+11: leftHandIndex1
+12: rightHandIndex1
+13: neck
+14: leftShoulder
+15: rightShoulder
+16: head
+17: leftForeArm
+18: rightForeArm
+19: leftArm
+20: rightArm
+21: leftHand
+22: rightHand
+23: leftToeBase
+24: rightToeBase
+
+
+
+
