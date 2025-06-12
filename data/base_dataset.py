@@ -8,6 +8,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import SentenceTransformer, util
 import logging
+from torchvision.transforms import v2
 
 from models.vlm import VLMManager
 from models.utils import pad_and_stack
@@ -48,7 +49,8 @@ def mask_split(img, num_parts):
 
 class BaseDataset(Dataset):
 
-    def __init__(self, dataset, mode, model_type='smpl', normalize=False, use_vlm: bool = True):
+    def __init__(self, dataset, mode, model_type='smpl', normalize=False, use_vlm: bool = True,
+                 transforms: bool = True):
         self.dataset = dataset
         self.mode = mode
         self.use_vlm = use_vlm
@@ -56,7 +58,7 @@ class BaseDataset(Dataset):
         print(f'Loading dataset: {constants.DATASET_FILES[mode][dataset]} for mode: {mode}')
 
         self.data = np.load(constants.DATASET_FILES[mode][dataset], allow_pickle=True)
-
+        
         self.images = self.data['imgname']
 
         # get 3d contact labels, if available
@@ -75,7 +77,7 @@ class BaseDataset(Dataset):
             self.num_object_classes = 70
         except KeyError:
             self.has_semantic_contact = np.zeros(len(self.images))
-            self.num_object_classes = 1  # Default to single class for binary contact
+            self.num_object_classes = 70  # Default to single class for binary contact
 
         # get 2d polygon contact labels, if available
         try:
@@ -114,8 +116,28 @@ class BaseDataset(Dataset):
         else:
             raise NotImplementedError
 
-        self.normalize = normalize
-        self.normalize_img = Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD)
+        if transforms:
+            self.use_transforms = transforms
+            self.transform = v2.Compose([
+               # v2.RandomHorizontalFlip(),
+               # v2.RandomVerticalFlip(),
+               # v2.RandomRotation(degrees=30),
+               # v2.RandomResizedCrop(size=(256, 256), scale=(0.8, 1.2)),
+                v2.RandomApply([v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)], p=0.5),
+               # v2.RandomGrayscale(p=0.2),
+                v2.RandomInvert(p=0.2),
+                v2.RandomSolarize(threshold=0.5, p=0.2),
+                v2.RandomAutocontrast(p=0.2),
+                v2.RandomEqualize(p=0.2),
+                v2.RandomPosterize(bits=4, p=0.2),
+                v2.RandomAdjustSharpness(sharpness_factor=2, p=0.2),
+               # v2.RandomPerspective(distortion_scale=0.2, p=0.2),
+               # v2.RandomApply([v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1))], p=0.3),
+                v2.Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD),
+                ])
+        else:
+            self.normalize = normalize
+            self.normalize_img = Normalize(mean=constants.IMG_NORM_MEAN, std=constants.IMG_NORM_STD)
 
         # Initialize object class embeddings cache
         self.object_classes = [
@@ -142,6 +164,11 @@ class BaseDataset(Dataset):
             # Replace underscores with spaces for better semantic matching
             class_names = [name.replace('_', ' ') for name in self.object_classes]
             self.object_embeddings = model.encode(class_names, convert_to_tensor=True)
+
+
+        if self.use_vlm:
+            self.vlm_manager = VLMManager()
+            self.vlm_manager.generate_texts(self.images, batch_size=8)
         
     def compute_pos_weight (self):
         """
@@ -171,10 +198,6 @@ class BaseDataset(Dataset):
         torch.save(pos_weights, 'pos_weights_damon.pt')
         return pos_weights
 
-        if self.use_vlm:
-                self.vlm_manager = VLMManager()
-                if not self.vlm_manager.check_cache(self.images):
-                    self.vlm_manager.extract_from_paths(self.images)
 
     def _map_object_to_coco_class(self, obj_name):
         """
@@ -277,7 +300,7 @@ class BaseDataset(Dataset):
                     semantic_contact[obj_class_idx, vertex_indices] = 1.0
         else:
             # If no semantic contacts, create a single-class tensor with binary contacts
-            semantic_contact = np.zeros((self.num_object_classes, self.n_vertices))
+            semantic_contact = -np.ones((self.num_object_classes, self.n_vertices))
             if self.has_contact_3d[index]:
                 # Use the first class for binary contacts
                 semantic_contact[0] = contact_label_3d
@@ -310,11 +333,30 @@ class BaseDataset(Dataset):
         except:
             print('2D polygon contact: ', polygon_contact_2d_path)
 
-        if self.normalize:
+
+        img = torch.tensor(img, dtype=torch.float32)
+        sem_mask = torch.tensor(sem_mask, dtype=torch.float32)
+        part_mask = torch.tensor(part_mask, dtype=torch.float32)
+
+        if self.use_transforms:
+            transformed = self.transform({'image': img, 'sem_mask': sem_mask, 'part_mask': part_mask})
+            img = transformed['image']
+            sem_mask = transformed['sem_mask']
+            part_mask = transformed['part_mask']
+
+            item['img'] = img
+            item['sem_mask'] = sem_mask
+            item['part_mask'] = part_mask
+
+        elif self.normalize:
             img = torch.tensor(img, dtype=torch.float32)
             item['img'] = self.normalize_img(img)
+            item['sem_mask'] = sem_mask
+            item['part_mask'] = part_mask
         else:
             item['img'] = torch.tensor(img, dtype=torch.float32)
+            item['sem_mask'] = sem_mask
+            item['part_mask'] = part_mask
 
         if self.is_smplx[index]:
             # Add 6 zeros to the end of the pose vector to match with smpl
@@ -322,14 +364,14 @@ class BaseDataset(Dataset):
 
         item['img_path'] = img_path
         item['pose'] = torch.tensor(pose, dtype=torch.float32)
+        if self.dataset == "rich":
+            item['pose'] = torch.cat((item['pose'], torch.zeros(6)))
         item['betas'] = torch.tensor(betas, dtype=torch.float32)
         item['transl'] = torch.tensor(transl, dtype=torch.float32)
         item['cam_k'] = self.cam_k[index]
         item['img_scale_factor'] = torch.tensor(img_scale_factor, dtype=torch.float32)
         item['contact_label_3d'] = torch.tensor(contact_label_3d, dtype=torch.float32)
         item['semantic_contact'] = torch.tensor(semantic_contact, dtype=torch.float32)
-        item['sem_mask'] = torch.tensor(sem_mask, dtype=torch.float32)
-        item['part_mask'] = torch.tensor(part_mask, dtype=torch.float32)
         item['polygon_contact_2d'] = torch.tensor(polygon_contact_2d, dtype=torch.float32)
 
         item['has_smpl'] = self.has_smpl[index]
@@ -337,10 +379,15 @@ class BaseDataset(Dataset):
         item['has_contact_3d'] = self.has_contact_3d[index]
         item['has_semantic_contact'] = self.has_semantic_contact[index]
         item['has_polygon_contact_2d'] = self.has_polygon_contact_2d[index]
+        item["dataset"] = self.dataset
 
 
         if self.use_vlm:
-            item["vlm_features"] = self.vlm_manager[self.images[index]]
+            if self.dataset == "rich":
+                imgname = "Mask2Former/rich4download/" + os.path.basename(self.sem_masks[index])
+            else:
+                imgname = self.images[index]
+            item["vlm_features"] = self.vlm_manager[imgname]
 
         return item
 

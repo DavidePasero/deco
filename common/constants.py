@@ -19,7 +19,7 @@ CONTACT_MAPPING_PATH = 'data/conversions'
 DATASET_FILES = {
     'train': {
         'damon': join(DATASET_NPZ_PATH, 'damon/hot_dca_trainval.npz'),
-        'rich': join(DATASET_NPZ_PATH, 'rich/rich_train_smplx_cropped_bmp.npz'),
+        'rich': join(DATASET_NPZ_PATH, 'rich/train-rich.npz'),
         'prox': join(DATASET_NPZ_PATH, 'prox/prox_train_smplx_ds4.npz'),
     },
     'val': {

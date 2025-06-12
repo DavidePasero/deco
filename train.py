@@ -26,6 +26,7 @@ def _create_run_name(hparams):
         run_name += f"_num_encoders={hparams.TRAINING.NUM_ENCODER}"
 
     run_name += f"use_vlm{hparams.TRAINING.USE_VLM}"
+    run_name += f"train_vlm_text_encoder{hparams.TRAINING.TRAIN_VLM_TEXT_ENCODER}"
 
     return run_name
 
@@ -41,9 +42,17 @@ def train(hparams):
             num_encoders=hparams.TRAINING.NUM_ENCODER,
             classifier_type=hparams.TRAINING.CLASSIFIER_TYPE,
             train_backbone=hparams.TRAINING.TRAIN_BACKBONE,
+            train_vlm_text_encoder=hparams.TRAINING.TRAIN_VLM_TEXT_ENCODER,
+            use_vlm=hparams.TRAINING.USE_VLM,
+            patch_cross_attention=hparams.TRAINING.PATCH_CROSS_ATTENTION
             ) # set up DinoContact here
     elif hparams.TRAINING.MODEL_TYPE == 'dinoContact':
-        deco_model = DINOContact(device, train_backbone=hparams.TRAINING.TRAIN_BACKBONE)
+        deco_model = DINOContact(encoder_name=hparams.TRAINING.ENCODER,
+                                 classifier_type=hparams.TRAINING.CLASSIFIER_TYPE,
+                                 train_backbone=hparams.TRAINING.TRAIN_BACKBONE,
+                                 train_vlm_text_encoder=hparams.TRAINING.TRAIN_VLM_TEXT_ENCODER,
+                                 use_vlm=hparams.TRAINING.USE_VLM,
+                                 )
     else:
         raise ValueError('Model type not supported')
 
@@ -51,7 +60,7 @@ def train(hparams):
         hparams.TRAINING.CONTEXT = False
 
     solver = TrainStepper(deco_model, hparams.TRAINING.CONTEXT, hparams.OPTIMIZER.LR, hparams.TRAINING.LOSS_WEIGHTS,
-                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, run_name=_create_run_name(hparams))
+                          hparams.TRAINING.PAL_LOSS_WEIGHTS, device, use_semantic_class_balanced_loss = hparams.TRAINING.USE_SEMANTIC_CLASS_BALANCED_LOSS, run_name=_create_run_name(hparams))
 
     vb_f1 = 0
     start_ep = 0
@@ -123,12 +132,13 @@ if __name__ == '__main__':
         device = torch.device('cpu')
 
     train_dataset = MixedDataset(hparams.TRAINING.DATASETS, 'train', dataset_mix_pdf=hparams.TRAINING.DATASET_MIX_PDF,
-                                 normalize=hparams.DATASET.NORMALIZE_IMAGES, use_vlm=hparams.TRAINING.USE_VLM)
+                                 normalize=hparams.DATASET.NORMALIZE_IMAGES, use_vlm=hparams.TRAINING.USE_VLM,
+                                 transforms=hparams.DATASET.AUGMENTATION)
 
     val_datasets = []
     for ds in hparams.VALIDATION.DATASETS:
         if ds in ['rich', 'prox']:
-            val_datasets.append(BaseDataset(ds, 'val', model_type='smplx', normalize=hparams.DATASET.NORMALIZE_IMAGES,
+            val_datasets.append(BaseDataset(ds, 'val', model_type='smpl', normalize=hparams.DATASET.NORMALIZE_IMAGES,
                                 use_vlm=hparams.TRAINING.USE_VLM)),
         elif ds in ['damon']:
             val_datasets.append(BaseDataset(ds, 'val', model_type='smpl', normalize=hparams.DATASET.NORMALIZE_IMAGES,
@@ -136,14 +146,9 @@ if __name__ == '__main__':
         else:
             raise ValueError('Dataset not supported')
 
-    if hparams.TRAINING.USE_VLM:
-        collator = VLMFeatureCollator()
-    else:
-        collator = None
-
     train_loader = DataLoader(train_dataset, hparams.DATASET.BATCH_SIZE, shuffle=True,
-                              num_workers=hparams.DATASET.NUM_WORKERS, collate_fn=collator)
+                              num_workers=hparams.DATASET.NUM_WORKERS,)
     val_loaders = [DataLoader(val_dataset, batch_size=hparams.DATASET.BATCH_SIZE, shuffle=False,
-                              num_workers=hparams.DATASET.NUM_WORKERS, collate_fn=collator) for val_dataset in val_datasets]
+                              num_workers=hparams.DATASET.NUM_WORKERS,) for val_dataset in val_datasets]
 
     train(hparams)

@@ -5,6 +5,7 @@ import shutil
 import time
 from functools import reduce
 from typing import List, Union
+import torch
 
 import configargparse
 import yaml
@@ -29,9 +30,21 @@ def parse_args():
         parser.add_argument('--gpu_arch', default=['tesla', 'quadro', 'rtx'],
                             nargs='*', help='additional options to update config')
         parser.add_argument('--num_cpus', type=int, default=8, help='num cpus for cluster')
-        parser.add_argument('--model_type', type=str, choices=['deco', 'dinoContact'], default='deco', help='model type')
-        parser.add_argument('--encoder', type=str, choices=['swin', 'hrnet', 'dinov2'], default='dinov2', help='encoder type')
-        parser.add_argument('--classifier_type', type=str, choices=['shared', 'independent'], default='shared', help='classifier type')
+        parser.add_argument('--model_type', help='Type of the model to load (deco or dinoContact)',
+                    default='deco', type=str)
+        parser.add_argument('--encoder', help='Flag to train the encoder',
+                            type=str, default="dinov2-giant")
+        parser.add_argument('--num_encoder', help='Number of encodersr',
+                            type=int, default=2)
+        parser.add_argument('--classifier_type', help='Classifier type for the model',
+                            default='shared', type=str)
+        parser.add_argument('--device', help='Device to use (cuda or cpu)',
+                            default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
+        parser.add_argument('--train-backbone', action='store_true')
+        parser.add_argument('--context', action='store_true')
+        parser.add_argument('--use-vlm', action='store_true')
+        parser.add_argument('--train-vlm-text-encoder', action='store_true')
+        parser.add_argument('--patch-cross-attention', action='store_true')
         return parser
 
     # For Blender main parser

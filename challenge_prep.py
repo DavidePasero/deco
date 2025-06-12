@@ -12,6 +12,7 @@ import zipfile
 
 
 from models.deco import DECO, DINOContact
+from models.vlm import VLMManager
 from common import constants
 
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
@@ -52,7 +53,10 @@ def initiate_model(args):
             classifier_type=args.classifier_type,
             num_encoders=args.num_encoder,
             train_backbone=args.train_backbone,
-            )  # set up DinoContact here
+            train_vlm_text_encoder=args.train_vlm_text_encoder,
+            use_vlm=args.use_vlm,
+            patch_cross_attention=args.patch_cross_attention,
+        )
     elif args.model_type ==  'dinoContact':
         deco_model = DINOContact(args.device)
     else:
@@ -70,7 +74,7 @@ def initiate_model(args):
 
 def main(args):
     if os.path.isdir(args.img_src):
-        images = glob.iglob(args.img_src + '/*', recursive=True)
+        images = list(glob.iglob(args.img_src + '/*', recursive=True))
     else:
         images = [args.img_src]
 
@@ -92,20 +96,28 @@ def main(args):
 
     rev_obj_mapping = {v: k for k,v in obj_mapping.items()}
 
+    if args.use_vlm:
+        vlm_manager = VLMManager()
+        vlm_manager.generate_texts(images, batch_size=4)
+
     deco_model = initiate_model(args)
     challenge_data = {}
 
     for img_name in tqdm(images, desc="Prepping images..."):
         img = cv2.imread(img_name)
+        if args.use_vlm:
+            text_features = vlm_manager[img_name]
+        else:
+            text_features = None
         img = cv2.resize(img, (256, 256), cv2.INTER_CUBIC)
         img = img.transpose(2, 0, 1) / 255.0
         img = img[np.newaxis, :, :, :]
         img = torch.tensor(img, dtype=torch.float32).to(device)
 
         if args.context:
-            cont, _, _, sem_cont = deco_model(img)
+            cont, _, _, sem_cont = deco_model(img, vlm_feats=[text_features])
         else:
-            cont, sem_cont = deco_model(img)
+            cont, sem_cont = deco_model(img, vlm_feats=[text_features])
         cont = cont.detach().cpu().numpy().squeeze()
 
         # Get contact vertices
@@ -148,12 +160,12 @@ if __name__ == '__main__':
                         default='./datasets/HOT-Annotated/test', type=str)
     parser.add_argument("--out_path", default="challenges/pred", type=str)
     parser.add_argument('--model_path', help='Path to best model weights',
-                        default='checkpoints/Other_Checkpoints/dino-contact-for-real(other_one_is_baseline)_best.pth'
+                        default='/home/lukas/Projects/deco/checkpoints/Other_Checkpoints/deco-pathc-ca_best.pth'
                         , type=str)
     parser.add_argument('--model_type', help='Type of the model to load (deco or dinoContact)',
-                        default='dinoContact', type=str)
+                        default='deco', type=str)
     parser.add_argument('--encoder', help='Flag to train the encoder',
-                        type=str, default="dinov2-giant")
+                        type=str, default="dinov2-large")
     parser.add_argument('--num_encoder', help='Number of encodersr',
                         type=int, default=2)
     parser.add_argument('--classifier_type', help='Classifier type for the model',
@@ -162,6 +174,10 @@ if __name__ == '__main__':
                         default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
     parser.add_argument('--train-backbone', action='store_true')
     parser.add_argument('--context', action='store_true')
+    parser.add_argument('--use-vlm', action='store_true')
+    parser.add_argument('--train-vlm-text-encoder', action='store_true')
+    parser.add_argument('--patch-cross-attention', action='store_true')
+
 
     args = parser.parse_args()
     main(args)

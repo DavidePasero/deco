@@ -31,7 +31,8 @@ class MultiClassContactLoss(nn.Module):
         num_classes: int = 70,
         contact_weight: float = 1.0,
         class_weight: float   = 0.5,
-        dist_weight: float    = 0.08,           
+        dist_weight: float    = 0.08,
+        use_semantic_class_balanced_loss: bool = False     
     ):
         super().__init__()
         self.num_classes   = num_classes
@@ -41,13 +42,17 @@ class MultiClassContactLoss(nn.Module):
 
         # Load per-vertex effective-number pos weights
         pos_weight_arr = torch.load("pos_weights_damon.pt").float()
+        if use_semantic_class_balanced_loss:
+            pos_weight_objectwise = torch.load("class_weights_damon.pt").float()
+        else:
+            pos_weight_objectwise = torch.ones(num_classes).float()
         # You can pass a tensor of size [1] or compute externally.
         self.bce_contact = nn.BCEWithLogitsLoss(
             reduction="mean",
             pos_weight=pos_weight_arr
         )
         # per-class loss (one‐hot targets) – weight can be tuned per class later
-        self.ce_class = nn.CrossEntropyLoss(reduction="none")
+        self.ce_class = nn.CrossEntropyLoss(reduction="none", weight=pos_weight_objectwise)
 
     # -------------------------------------------------------------------- #
     def forward(self, cont_pred: torch.Tensor, vertex_obj_pred: torch.Tensor, target: torch.Tensor):
@@ -74,15 +79,22 @@ class MultiClassContactLoss(nn.Module):
         # ---------------------------------------------------------------- #
         # 2) Cross entropy loss – only on vertices that truly have contact
         # ---------------------------------------------------------------- #
-        contact_mask = target_any_contact.bool()                  # [B, V]
+        
+        all_zero_batch_mask = (target[:, 1:, :] == -1).all(dim=(1, 2))  # shape: [10], True where all are 0
+        valid_batch_mask = ~all_zero_batch_mask
+        vertex_obj_pred_sem = vertex_obj_pred[valid_batch_mask]
+        target_sem = target[valid_batch_mask]
+        
+        contact_mask = target_sem.any(dim=1).bool()   
+                       # [B, V]
 
         if contact_mask.any():
             # Expand mask to [B, C, V] for broadcasting                    # [B,1,V]
-            per_class_loss = self.ce_class(vertex_obj_pred, target)         # [B,C,V]
+            per_class_loss = self.ce_class(vertex_obj_pred_sem, target_sem)         # [B,C,V]
             # keep only vertices where GT has contact
             semantic_loss = (per_class_loss * contact_mask).sum() / contact_mask.sum()
         else:
-            semantic_loss = vertex_obj_pred.new_tensor(0.0)
+            semantic_loss = vertex_obj_pred_sem.new_tensor(0.0)
 
         # ---------------------------------------------------------------- #
         # 3) Geodesic distance penalty (optional)

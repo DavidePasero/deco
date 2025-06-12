@@ -7,7 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class TrainStepper():
-    def __init__(self, deco_model, context, learning_rate, loss_weight, pal_loss_weight, device, log_dir="runs",
+    def __init__(self, deco_model, context, learning_rate, loss_weight, pal_loss_weight, device, use_semantic_class_balanced_loss, log_dir="runs",
                  run_name: str = ""):
         self.device = device
         self.global_step = 0
@@ -23,7 +23,7 @@ class TrainStepper():
         self.lr = learning_rate
         self.loss_weight = loss_weight
         self.pal_loss_weight = pal_loss_weight
-        self.semantic_contact_loss = MultiClassContactLoss().to(device)
+        self.semantic_contact_loss = MultiClassContactLoss(use_semantic_class_balanced_loss=use_semantic_class_balanced_loss).to(device)
         self.semantic_loss_weight = 0.1  # Weight for semantic loss (between contact and pixel anchoring)
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -39,22 +39,21 @@ class TrainStepper():
         # DINOContact: single encoder + classifier
         if deco_model.__class__.__name__ == 'DINOContact':
             self.optimizer_contact = torch.optim.Adam(
-                params=[p for p in self.model.encoder.parameters() if p.requires_grad]
-                       + list(self.model.classifier.parameters()),
+                params=self.model.get_params(),
                 lr=learning_rate,
                 weight_decay=0.0001)
             return
         elif deco_model.__class__.__name__ == 'DECO':
             self.optimizer_sem = torch.optim.Adam(
-                params=self.model.get_encoder_params() + self.model.get_semantic_branch_params(),
+                params=self.model.get_encoder_params() + self.model.get_semantic_branch_params() + self.model.get_vlm_params(),
                 lr=learning_rate,
                 weight_decay=0.0001)
             self.optimizer_part = torch.optim.Adam(
-                params=self.model.get_encoder_params() + self.model.get_part_branch_params(),
+                params=self.model.get_encoder_params() + self.model.get_part_branch_params() + self.model.get_vlm_params(),
                 lr=learning_rate,
                 weight_decay=0.0001)
             self.optimizer_contact = torch.optim.Adam(
-                params=self.model.get_encoder_params() + self.model.get_contact_branch_params(),
+                params=self.model.get_encoder_params() + self.model.get_contact_branch_params() + self.model.get_vlm_params(),
                 lr=learning_rate,
                 weight_decay=0.0001)
         else:
@@ -88,18 +87,20 @@ class TrainStepper():
         has_polygon_contact_2d = batch['has_polygon_contact_2d'].to(self.device)
 
         # Add semantic contact labels
-        semantic_contact_labels = batch['semantic_contact'].to(self.device)
+        semantic_contact_labels = batch.get('semantic_contact')
+        if semantic_contact_labels is not None:
+            semantic_contact_labels = semantic_contact_labels.to(self.device)
+            
         has_semantic_contact = batch['has_semantic_contact'].to(self.device)
 
         vlm_feats = batch.get('vlm_features')
-        vlm_feats = vlm_feats.to(self.device) if vlm_feats is not None else None
 
         # Forward pass
         if self.context:
             cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img, vlm_feats=vlm_feats)
 
         else:
-            cont, semantic_logits = self.model(img, vlm_feats=batch.get('vlm_features').to(self.device))
+            cont, semantic_logits = self.model(img, vlm_feats=vlm_feats)
 
         if self.context:
             loss_sem = self.sem_loss(sem_mask_gt, sem_mask_pred)
@@ -109,7 +110,6 @@ class TrainStepper():
 
         # CONTACT LOSS CALCULATION
         total_cont_loss, loss_cont, loss_semantic, loss_dist = self.semantic_contact_loss(cont, semantic_logits, semantic_contact_labels)
-
 
         if self.pal_loss_weight > 0 and (is_smplx == 0).sum() > 0:
             smpl_body_params = {'pose': pose[is_smplx == 0], 'betas': betas[is_smplx == 0],
@@ -241,11 +241,14 @@ class TrainStepper():
         has_semantic_contact = batch['has_semantic_contact'].to(self.device)
 
         # Forward pass
+
+        vlm_feats = batch.get('vlm_features')
+
         initial_time = time.time()
         if self.context:
-            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img)
+            cont, sem_mask_pred, part_mask_pred, semantic_logits = self.model(img, vlm_feats=vlm_feats)
         else:
-            cont, semantic_logits = self.model(img)
+            cont, semantic_logits = self.model(img, vlm_feats=vlm_feats)
         time_taken = time.time() - initial_time
 
         if self.context:

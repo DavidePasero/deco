@@ -1,35 +1,40 @@
-EXP_NAME: 'deco-vlm'
+EXP_NAME: 'deco_dino_damon_pca_no_classbalance_objwise'
 PROJECT_NAME: 'DECO_demo_training'
-OUTPUT_DIR: 'dino-contact_results'
+OUTPUT_DIR: 'deco_dino_damon_pca_no_classbalance_objwise'
 CONDOR_DIR: ''
 DATASET:
-  BATCH_SIZE: 8
+  BATCH_SIZE: 16
   NUM_WORKERS: 8
   NORMALIZE_IMAGES: [True]
+  AUGMENTATION: True
 OPTIMIZER:
   TYPE: 'adam'
-  LR: [1e-5]
-  NUM_UPDATE_LR: 30
+  LR: [3e-5]
+  NUM_UPDATE_LR: 10
 TRAINING:
-  ENCODER: 'hrnet'
+  ENCODER: 'dinov2-giant'
   NUM_ENCODER: 2
   MODEL_TYPE: "deco"
   CONTEXT: [True]
   NUM_EPOCHS: 100
   NUM_EARLY_STOP: 50
-  SUMMARY_STEPS: 5
+  SUMMARY_STEPS: 10
   CHECKPOINT_EPOCHS: 20
   DATASETS: ['damon']
   DATASET_MIX_PDF: ['1.0'] # should sum to 1.0 unless you want to weight by dataset size
   DATASET_ROOT_PATH: ''
-  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/hr-net_vlm.pth'
+  BEST_MODEL_PATH: './checkpoints/Other_Checkpoints/deco_dino_damon_pca_no_classbalance_objwise.pth'
   LOSS_WEIGHTS: 1.
   PAL_LOSS_WEIGHTS: 0.01
   SEMANTIC_CLASSIFIER: True
   SHARED_SEMANTIC_CLASSIFIER: True
   CLASSIFIER_TYPE: "shared"
-  TRAIN_BACKBONE: False #only for DINO backbone
-  USE_VLM: True
+  TRAIN_BACKBONE: True #only for DINO backbone
+  USE_VLM: False
+  TRAIN_VLM_TEXT_ENCODER: False
+  PATCH_CROSS_ATTENTION: True
+  USE_SEMANTIC_CLASS_BALANCED_LOSS: False
+
 VALIDATION:
   SUMMARY_STEPS: 5
   DATASETS: ['damon']

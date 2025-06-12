@@ -1,4 +1,5 @@
-from models.components import Encoder, Cross_Att, Decoder, Classifier, SemanticClassifier, SharedSemanticClassifier
+from models.components import (Encoder, Cross_Att, Decoder, Classifier, SemanticClassifier, SharedSemanticClassifier,
+                               VLMTextEncoder, EfficientSelfAttention, VisualTextCrossAttention, AttentivePooling)
 import torch.nn as nn
 import torch
 from dataclasses import dataclass
@@ -79,13 +80,18 @@ class DECO(nn.Module):
                  use_vlm: bool = False,
                  train_backbone: bool = False,
                  lora_r: int = 8,
-                 lora_alpha: int = 32,):
+                 lora_alpha: int = 32,
+                 train_vlm_text_encoder = False,
+                 patch_cross_attention=False):
         super(DECO, self).__init__()
         self.encoder_type = encoder
         self.context = context
         self.classifier_type = classifier_type
         self.train_backbone = train_backbone
         self.use_vlm = use_vlm
+        self.train_vlm_text_encoder = train_vlm_text_encoder
+        self.num_encoders = num_encoders
+        self.patch_cross_attention = patch_cross_attention
 
         if self.encoder_type == 'hrnet':
             self.encoder_sem = Encoder(encoder=encoder).to(device)
@@ -109,23 +115,23 @@ class DECO(nn.Module):
             if self.context:
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
-            self.cross_att = Cross_Att(1024, 1024).to(device)
-            self.classif = Classifier(1024).to(device)
+            self.cross_att = Cross_Att(1536, 1536).to(device)
+            self.classif = Classifier(1536).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
+                self.semantic_classif = SharedSemanticClassifier(1536).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(1024).to(device)
+                self.semantic_classif = SemanticClassifier(1536).to(device)
 
         elif "dinov2" in self.encoder_type:
             self.num_encoders = num_encoders
             hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type]
 
             if self.num_encoders > 1:
-                self.encoder_sem = Encoder(encoder=self.encoder_type).to(device)
-                self.encoder_part = Encoder(encoder=self.encoder_type).to(device)
+                self.encoder_sem = Encoder(encoder=self.encoder_type, return_cls_token=not patch_cross_attention).to(device)
+                self.encoder_part = Encoder(encoder=self.encoder_type, return_cls_token=not patch_cross_attention).to(device)
             else:
-                self.encoder = Encoder(encoder=self.encoder_type, device=device)
+                self.encoder = Encoder(encoder=self.encoder_type, device=device, return_cls_token=not patch_cross_attention).to(device)
                 self.scene_projector = nn.Linear(hidden_dim, 1024).to(device)
                 self.contact_projector = nn.Linear(hidden_dim, 1024).to(device)
 
@@ -141,20 +147,27 @@ class DECO(nn.Module):
 
             self.correction_conv = nn.Conv1d(hidden_dim, 1024, 1).to(device)
 
-            if self.context:
+            if  self.context:
                 self.decoder_sem = Decoder(1, 133, encoder=encoder).to(device)
                 self.decoder_part = Decoder(1, 26, encoder=encoder).to(device)
 
-            self.cross_att = Cross_Att(1024, 1024).to(device)
-            self.classif = Classifier(1024).to(device)
+            if patch_cross_attention:
+                self.cross_att = VisualTextCrossAttention(hidden_dim, hidden_dim).to(device)
+                self.self_att = EfficientSelfAttention(hidden_dim, hidden_dim).to(device)
+                self.pooling = AttentivePooling(hidden_dim).to(device)
+            else:
+                self.cross_att = Cross_Att(1024, 1024).to(device) # This needs to stay like this because of the 32x32 segmentation
+
+            self.classif = Classifier(hidden_dim if (patch_cross_attention or use_vlm) else 1024).to(device)
             # Add semantic classifier with correct input dimension for swin
             if self.classifier_type == 'shared':
-                self.semantic_classif = SharedSemanticClassifier(1024).to(device)
+                self.semantic_classif = SharedSemanticClassifier(hidden_dim if (patch_cross_attention or use_vlm) else 1024).to(device)
             else:
-                self.semantic_classif = SemanticClassifier(1024).to(device)
+                self.semantic_classif = SemanticClassifier(hidden_dim if (patch_cross_attention or use_vlm) else 1024).to(device)
 
             # ---- LoRA adaptation on DINOv2 backbone ----
             if self.train_backbone and 'dinov2' in self.encoder_type:
+                print("--------------------------------------------- Training Backbone with LoRA  ---------------------------------------------")
                 lora_cfg = LoraConfig(
                     task_type=TaskType.FEATURE_EXTRACTION,
                     r=lora_r,
@@ -177,19 +190,43 @@ class DECO(nn.Module):
         else:
             NotImplementedError('Encoder type not implemented')
 
+        if encoder == "hrnet":
+            num_channels = 480
+        else:
+            num_channels = DINOv2NAME_TO_HIDDEN_DIM[encoder]
+        self.dec_proj_sem = nn.Linear(num_channels, 1024).to(device)
+        self.dec_proj_part = nn.Linear(num_channels, 1024).to(device)
+
         # -----------------------  SmolVLM branch  ------------------------
         self.use_vlm = use_vlm
         if self.use_vlm:
-            print("-----------------------Using VLM!!!-----------------------")
-            vlm_id = "HuggingFaceTB/SmolVLM-Instruct"
-            self.tf_agg = lambda x: torch.mean(x, dim=1).squeeze().to(torch.float32) #TODO fix the nan error TextFeatureAggregator(2048).to(device)
-            if encoder == "hrnet":
-                num_channels = 480
+            print("--------------------------------------------- Using VLM  ---------------------------------------------")
+
+            self.vlm_text_encoder = VLMTextEncoder(device=device)
+
+            if self.train_vlm_text_encoder:
+                print("--------------------------------------------- Training VLM Text Encoder with LoRA  ---------------------------------------------")
+                lora_cfg = LoraConfig(
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                    r=lora_r,
+                    lora_alpha=lora_alpha,
+                    target_modules=["q", "k", "v", "o"]
+                )
+                self.vlm_text_encoder = get_peft_model(self.vlm_text_encoder, lora_cfg)
+
+            self.text_projector = nn.Linear(768, num_channels).to(device)
+
+            if self.num_encoders == 2:
+                self.cross_att_text_sem = VisualTextCrossAttention(num_channels, 768).to(device)
+                self.sem_self_att = EfficientSelfAttention(num_channels, num_channels).to(device)
+                self.cross_att_text_part = VisualTextCrossAttention(num_channels, 768).to(device)
+                self.part_self_att = EfficientSelfAttention(num_channels, num_channels).to(device)
+                self.sem_proj = nn.Linear(num_channels, num_channels).to(device)
+                self.part_proj = nn.Linear(num_channels, num_channels).to(device)
+                self.pooling = AttentivePooling(num_channels).to(device)
             else:
-                num_channels = DINOv2NAME_TO_HIDDEN_DIM[encoder]
-            self.text_projector = nn.Linear(2048, num_channels).to(device)
-            # second cross‑attention: image ↔ text
-            self.cross_att_text = Cross_Att(num_channels, num_channels).to(device)
+                self.cross_att_text = VisualTextCrossAttention(num_channels, 768).to(device)
+                self.self_att = EfficientSelfAttention(num_channels, num_channels).to(device)
 
         self.device = device
 
@@ -214,7 +251,8 @@ class DECO(nn.Module):
             if self.num_encoders == 1:
                 params += list(self.scene_projector.parameters())
             params += list(self.decoder_sem.parameters())
-            params += list(self.correction_conv.parameters())
+            params += list(self.correction_conv.parameters()) if hasattr(self, "correction_conv") else []
+            params += list(self.dec_proj_sem.parameters()) if hasattr(self, "dec_proj_sem") else []
         return params
 
     def get_part_branch_params(self):
@@ -227,19 +265,54 @@ class DECO(nn.Module):
             if self.num_encoders == 1:
                 params += list(self.contact_projector.parameters())
             params += list(self.decoder_part.parameters())
-            params += list(self.correction_conv.parameters())
+            params += list(self.correction_conv.parameters()) if hasattr(self, "correction_conv") else []
+            params += list(self.dec_proj_part.parameters()) if hasattr(self, "dec_proj_part") else []
+
         return params
 
     def get_contact_branch_params(self):
         """
         Returns parameters for the contact head: cross-attention, classifier, and correction_conv.
         """
-        return list(self.cross_att.parameters()) + list(self.classif.parameters()) + list(self.semantic_classif.parameters())
+        base_params = list(self.cross_att.parameters()) + list(self.classif.parameters()) + list(self.semantic_classif.parameters())
 
-    def forward(self, img):
+        if self.patch_cross_attention or self.use_vlm:
+            base_params += list(self.pooling.parameters())
+
+        return base_params
+
+    def get_vlm_params(self):
+        """
+        Returns parameters for the VLM text encoder and text projector.
+        """
+        if not self.use_vlm:
+            return []
+
+        base_params = list()
+
+        if self.num_encoders == 2:
+            base_params += list(self.cross_att_text_sem.parameters())  + list(self.sem_self_att.parameters()) 
+            base_params += list(self.cross_att_text_part.parameters()) + list(self.part_self_att.parameters()) 
+        else:
+            base_params += list(self.cross_att_text.parameters()) + list(self.self_att.parameters())
+
+        if self.train_vlm_text_encoder:
+            base_params += list(self.vlm_text_encoder.parameters())
+
+        if self.patch_cross_attention:
+            base_params += list(self.pooling.parameters())
+
+        return base_params
+
+    def forward(self, img, vlm_feats = None):
         if self.encoder_type == 'hrnet':
             sem_enc_out = self.encoder_sem(img)
             part_enc_out = self.encoder_part(img)
+
+            if self.use_vlm:
+                raise ValueError("VLM does not support HRNet yet")
+                #sem_enc_out = self._apply_vlm(vlm_feats, visual_features=sem_enc_out, target_branch="sem")
+                #part_enc_out = self._apply_vlm(vlm_feats, visual_features=part_enc_out, target_branch="part")
 
             if self.context:
                 sem_mask_pred = self.decoder_sem(sem_enc_out)
@@ -259,7 +332,7 @@ class DECO(nn.Module):
 
             # --- Optional VLM conditioning ---
             if self.use_vlm:
-                att = self._vlm_cross_att(vlm_feats, visual_features=att)
+                att = self._apply_vlm(vlm_feats, visual_features=att)
 
             cont = self.classif(att)
 
@@ -319,16 +392,25 @@ class DECO(nn.Module):
 
         return cont, logits_all
 
-    def _vlm_cross_att(self, vlm_feats, visual_features):
-        text_feature = vlm_feats
+    def _apply_vlm(self, vlm_texts, visual_features, target_branch: str = "default"):
+        text_feature = self.vlm_text_encoder(texts=vlm_texts)
+        if len(text_feature.shape) == 1:   #[B,1024]
+            text_feature = text_feature.unsqueeze(0)
 
-        text_feature_agg = self.tf_agg(text_feature)
-        txt_feat_proj = self.text_projector(text_feature_agg)
-        if len(txt_feat_proj.shape) == 1:   #[B,1024]
-            txt_feat_proj = txt_feat_proj.unsqueeze(0)
-        att = self.cross_att_text(visual_features, txt_feat_proj.unsqueeze(1))
+        if target_branch == "default":
+            att = self.cross_att_text(visual_features, text_feature)
+            att = self.self_att(att)
+        elif target_branch == "sem":
+            att = self.cross_att_text_sem(visual_features, text_feature)
+            att = self.sem_self_att(att)
+        elif target_branch == "part":
+            att = self.cross_att_text_part(visual_features, text_feature)
+            att = self.part_self_att(att)
+        else:
+            raise ValueError(f"Unknown target branch: {target_branch}")
 
         return att
+
 
     def _dinov2_forward_pass_shared_encoder(self, img, vlm_feats = None):
         if self.train_backbone:
@@ -341,15 +423,20 @@ class DECO(nn.Module):
         part_enc_out = self.contact_projector(features)
 
         if self.context:
-            sem_seg = torch.reshape(sem_enc_out, (-1, 1, 32, 32))
-            part_seg = torch.reshape(part_enc_out, (-1, 1, 32, 32))
+            dec_feats = self.dec_proj_sem(sem_enc_out)
+            part_feats = self.dec_proj_part(part_enc_out)
+            sem_seg = torch.reshape(dec_feats, (-1, 1, 32, 32))
+            part_seg = torch.reshape(part_feats, (-1, 1, 32, 32))
             sem_mask_pred = self.decoder_sem(sem_seg)
             part_mask_pred = self.decoder_part(part_seg)
 
         att = self.cross_att(sem_enc_out.unsqueeze(1), part_enc_out.unsqueeze(1))
 
         if self.use_vlm:
-            att = self._vlm_cross_att(vlm_feats, visual_features=att)
+            att = self._apply_vlm(vlm_feats, visual_features=att)
+
+        if self.patch_cross_attention:
+            att = self.pooling(att)
 
         cont = self.classif(att)
 
@@ -362,27 +449,37 @@ class DECO(nn.Module):
         sem_enc_out = self.encoder_sem(img)
         part_enc_out = self.encoder_part(img)
 
-        sem_seg = torch.reshape(sem_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
-        part_seg = torch.reshape(part_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+        if self.patch_cross_attention or self.use_vlm:
+            if self.use_vlm:
+                sem_enc_out = self._apply_vlm(vlm_feats, visual_features=sem_enc_out, target_branch="sem")
+                part_enc_out = self._apply_vlm(vlm_feats, visual_features=part_enc_out, target_branch="part")
 
-        sem_seg = self.correction_conv(sem_seg)
-        part_seg = self.correction_conv(part_seg)
+            if self.context:
+                dec_feats = self.dec_proj_sem(sem_enc_out)
+                part_feats = self.dec_proj_part(part_enc_out)
+                sem_mask_pred = self.decoder_sem(dec_feats.mean(axis=1).reshape(-1, 1, 32, 32))
+                part_mask_pred = self.decoder_part(part_feats.mean(axis=1).reshape(-1, 1, 32, 32))
+        else:
+            sem_seg = torch.reshape(sem_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+            part_seg = torch.reshape(part_enc_out, (-1, DINOv2NAME_TO_HIDDEN_DIM[self.encoder_type], 1))
+            sem_seg = self.correction_conv(sem_seg)
+            part_seg = self.correction_conv(part_seg)
 
-        sem_seg = torch.reshape(sem_seg, (-1, 1, 32, 32))
-        part_seg = torch.reshape(part_seg, (-1, 1, 32, 32))
+            sem_seg = torch.reshape(sem_seg, (-1, 1, 32, 32))
+            part_seg = torch.reshape(part_seg, (-1, 1, 32, 32))
+            sem_enc_out = sem_enc_out.unsqueeze(1)
+            part_enc_out = part_enc_out.unsqueeze(1)
 
-        if self.context:
-            sem_mask_pred = self.decoder_sem(sem_seg)
-            part_mask_pred = self.decoder_part(part_seg)
-
-        sem_enc_out = torch.reshape(sem_seg, (-1, 1, 1024))
-        part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
+            if self.context:
+                sem_mask_pred = self.decoder_sem(sem_seg)
+                part_mask_pred = self.decoder_part(part_seg)
+        
+            sem_enc_out = torch.reshape(sem_seg, (-1, 1, 1024))
+            part_enc_out = torch.reshape(part_seg, (-1, 1, 1024))
 
         att = self.cross_att(sem_enc_out, part_enc_out)
-
-        # --- Optional VLM conditioning ---
-        if self.use_vlm:
-            att = self._vlm_cross_att(vlm_feats, visual_features=att)
+        if self.patch_cross_attention:
+            att = self.pooling(att)
 
         cont = self.classif(att)
 
@@ -392,48 +489,101 @@ class DECO(nn.Module):
         return att, cont
 
 
-
 class DINOContact(nn.Module):
-    def __init__(self, device: str = "cuda", encoder_name: str = "dinov2-large",
-                 classifier_type: str = "shared", train_backbone: bool = False,
-                 train_last: int = -1,
-                 *args, **kwargs):
+    def __init__(
+        self, device: str = "cuda", encoder_name: str = "dinov2-large",
+        classifier_type: str = "shared", train_backbone: bool = False,
+        lora_r: int = 8, lora_alpha: int = 32,
+        use_vlm: bool = False, train_vlm_text_encoder: bool = False,
+        *args, **kwargs
+    ):
         super(DINOContact, self).__init__()
         self.device = device
-        self.num_layers_per_model = {
-            "dinov2-giant": 40,
-            "dinov2-large": 24
-        }
-        self.num_enc_layers = self.num_layers_per_model[encoder_name]
-        self.encoder = Encoder(encoder=encoder_name)
-        hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[encoder_name]
-        layers_to_train = [str(x) for x in range(self.num_enc_layers - train_last, self.num_enc_layers)]
-        """
-        for name, mod in self.encoder.named_parameters(): #VODOO
-            if set(layers_to_train).intersection(set(name.split("."))):
-                mod.requires_grad = True
-            else:
-                mod.requires_grad = False
-        """
-        self.classifier = Classifier(hidden_dim).to(device)
-        self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device) if classifier_type == "shared" else None
+        self.use_vlm = use_vlm
+        self.train_vlm_text_encoder = train_vlm_text_encoder
         self.train_backbone = train_backbone
 
-    def forward(self, x):
+        # --- Encoder + LoRA for backbone ---
+        self.encoder = Encoder(encoder=encoder_name, return_cls_token= not use_vlm).to(device)
+        hidden_dim = DINOv2NAME_TO_HIDDEN_DIM[encoder_name]
+        if self.train_backbone:
+            print("[DINOContact] Training backbone with LoRA")
+            lora_cfg = LoraConfig(
+                task_type=TaskType.FEATURE_EXTRACTION,
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                target_modules=[
+                    "attention.attention.query",
+                    "attention.attention.key",
+                    "attention.attention.value",
+                    "attention.output.dense"
+                ]
+            )
+            self.encoder = get_peft_model(self.encoder, lora_cfg)
+
+        # --- VLM branch ---
+        if self.use_vlm:
+            print("[DINOContact] Using VLM branch")
+            self.vlm_text_encoder = VLMTextEncoder(device=device)
+            if self.train_vlm_text_encoder:
+                print("[DINOContact] Training VLM Text Encoder with LoRA")
+                vlm_lora_cfg = LoraConfig(
+                    task_type=TaskType.FEATURE_EXTRACTION,
+                    r=lora_r,
+                    lora_alpha=lora_alpha,
+                    target_modules=["q", "k", "v", "o"]
+                )
+                self.vlm_text_encoder = get_peft_model(self.vlm_text_encoder, vlm_lora_cfg)
+            self.text_projector = nn.Linear(768, hidden_dim).to(device)
+            self.cross_att_text = VisualTextCrossAttention(hidden_dim, 768).to(device)
+            self.self_att = EfficientSelfAttention(hidden_dim, hidden_dim).to(device)
+            self.pooling = AttentivePooling(hidden_dim).to(device)
+
+        # --- Classifiers ---
+        self.classifier = Classifier(hidden_dim).to(device)
+        self.semantic_classif = SharedSemanticClassifier(hidden_dim).to(device) if classifier_type == "shared" else None
+        self.pooling = AttentivePooling(hidden_dim).to(device)
+
+    def forward(self, x, vlm_feats=None):
         if self.train_backbone:
             features = self.encoder(x)
         else:
             with torch.no_grad():
                 features = self.encoder(x)
 
-        cont = self.classifier(features)
+        # --- VLM branch ---
+        if self.use_vlm and vlm_feats is not None:
+            text_feature = self.vlm_text_encoder(texts=vlm_feats)
+            if len(text_feature.shape) == 1:
+                text_feature = text_feature.unsqueeze(0)
+            att = self.cross_att_text(features, text_feature)
+            att = self.self_att(att)
+            att = self.pooling(att)  # [B, hidden_dim]
+        else:
+            att = self.pooling(features)  # [B, hidden_dim]
+
+        cont = self.classifier(att.unsqueeze(1))  # expects [B, 1, F] or [B, F]
+
+        logits_all = None
+        if self.semantic_classif is not None:
+            feats = att  # already pooled [B, F]
+            logits_all = self.semantic_classif(feats)  # [B, C, 6890]
+
+        return (cont, logits_all) if logits_all is not None else cont
+
+    def get_params(self):
+        base_params = list(self.encoder.parameters()) + list(self.classifier.parameters())
+
+        if self.use_vlm:
+            if self.train_vlm_text_encoder:
+                base_params += list(self.vlm_text_encoder.parameters())
+
+            base_params += list(self.text_projector.parameters()) + list(self.cross_att_text.parameters()) + list(self.self_att.parameters()) +  list(self.pooling.parameters())
 
         if self.semantic_classif is not None:
-            feats = features.squeeze(1)  # [B, F]
-            logits_all = self.semantic_classif(feats)  # [B, C, 6890]
-            return cont, logits_all
-        return cont
+            base_params += list(self.semantic_classif.parameters())
 
+        return base_params
 
 
 
